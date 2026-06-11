@@ -1,0 +1,76 @@
+from pydantic_settings import BaseSettings
+from pydantic import field_validator
+from functools import lru_cache
+
+
+class Settings(BaseSettings):
+    # ── Database ──────────────────────────────────────────────────────────────
+    DATABASE_URL: str  # No default — MUST be in .env
+
+    # ── JWT ───────────────────────────────────────────────────────────────────
+    SECRET_KEY: str    # No default — MUST be in .env
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
+
+    # ── App ───────────────────────────────────────────────────────────────────
+    APP_NAME: str = "TrainSMART"
+    APP_VERSION: str = "2.0"
+    ENVIRONMENT: str = "development"  # "development" | "production"
+
+    # ── CORS ──────────────────────────────────────────────────────────────────
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+    LOGIN_MAX_ATTEMPTS: int = 5
+    LOGIN_LOCKOUT_MINUTES: int = 15
+
+    # ── Email (Gmail SMTP) ────────────────────────────────────────────────────
+    EMAIL_FROM: str = ""
+    EMAIL_PASSWORD: str = ""
+    EMAIL_HOST: str = "smtp.gmail.com"
+    EMAIL_PORT: int = 587
+    EMAIL_ENABLED: bool = True
+
+    @field_validator("SECRET_KEY")
+    @classmethod
+    def secret_key_must_be_strong(cls, v: str) -> str:
+        if v == "change-this-to-a-long-random-string-in-production":
+            raise ValueError(
+                "SECRET_KEY is still the default placeholder. "
+                "Generate a real key with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        if len(v) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 characters long.")
+        return v
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def database_url_must_not_be_sqlite_in_production(cls, v: str, info) -> str:
+        env = info.data.get("ENVIRONMENT", "development")
+        if env == "production" and v.startswith("sqlite"):
+            raise ValueError("SQLite cannot be used in production. Use PostgreSQL.")
+        return v
+
+    @property
+    def origins_list(self) -> list[str]:
+        return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT == "production"
+
+    @property
+    def docs_enabled(self) -> bool:
+        return not self.is_production
+
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()
