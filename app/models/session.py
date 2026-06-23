@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, Text, ForeignKey, func
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, Date, Text, ForeignKey, func
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -12,20 +12,20 @@ class TrainingSession(Base):
     county                = Column(String, nullable=False, index=True)
     facility              = Column(String, nullable=False)
     trainee_count         = Column(Integer, default=0)
-    start_date            = Column(String, nullable=False)
-    end_date              = Column(String, nullable=False)
+    start_date            = Column(Date, nullable=False)
+    end_date              = Column(Date, nullable=False)
 
     # Workflow status
     status                = Column(String, default="UPCOMING")        # UPCOMING | IN_PROGRESS | COMPLETED
     approval_status       = Column(String, default="PENDING")         # PENDING | APPROVED | REJECTED
     approval_note         = Column(Text, nullable=True)
-    approved_by           = Column(String, nullable=True)
+    approved_by           = Column(String, nullable=True)             # user ID of last reviewer
 
     # Report fields
     report_summary        = Column(Text, nullable=True)
     report_challenges     = Column(Text, nullable=True)
     report_recommendations= Column(Text, nullable=True)
-    report_submitted_at   = Column(String, nullable=True)
+    report_submitted_at   = Column(Date, nullable=True)
     report_approval_status= Column(String, default="PENDING")         # PENDING | APPROVED | REJECTED
     report_approval_note  = Column(Text, nullable=True)
 

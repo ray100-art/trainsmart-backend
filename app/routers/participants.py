@@ -1,10 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas.participant import ParticipantCreate, ParticipantOut, ScoresUpdate
 from app.services import session_service
-from app.core.dependencies import require_trainer, require_any_staff
+from app.core.dependencies import (
+    require_trainer, require_any_staff,
+    assert_owns_session, assert_session_approved, assert_training_mutable,
+    assert_can_view_session,
+)
 from app.models.user import User
 
 router = APIRouter(prefix="/sessions/{session_id}/participants", tags=["Participants"])
@@ -14,9 +18,10 @@ router = APIRouter(prefix="/sessions/{session_id}/participants", tags=["Particip
 def list_participants(
     session_id: str,
     db: Session = Depends(get_db),
-    _: User = Depends(require_any_staff),
+    current_user: User = Depends(require_any_staff),
 ):
     s = session_service.get_session_or_404(db, session_id)
+    assert_can_view_session(s, current_user)
     return s.participants
 
 
@@ -28,11 +33,9 @@ def add_participant(
     current_user: User = Depends(require_trainer),
 ):
     s = session_service.get_session_or_404(db, session_id)
-    if s.created_by != current_user.id and current_user.role != "ROLE_SYSTEM_ADMIN":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not own this session and cannot modify its participants.",
-        )
+    assert_owns_session(s, current_user)
+    assert_session_approved(s)
+    assert_training_mutable(s)
     return session_service.add_participant(
         db, session_id, data.name, data.cadre, data.facility, data.status, data.staff_number
     )
@@ -46,11 +49,9 @@ def toggle_attendance(
     current_user: User = Depends(require_trainer),
 ):
     s = session_service.get_session_or_404(db, session_id)
-    if s.created_by != current_user.id and current_user.role != "ROLE_SYSTEM_ADMIN":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not own this session and cannot modify its participants.",
-        )
+    assert_owns_session(s, current_user)
+    assert_session_approved(s)
+    assert_training_mutable(s)
     return session_service.toggle_attendance(db, session_id, participant_id)
 
 
@@ -63,11 +64,9 @@ def update_scores(
     current_user: User = Depends(require_trainer),
 ):
     s = session_service.get_session_or_404(db, session_id)
-    if s.created_by != current_user.id and current_user.role != "ROLE_SYSTEM_ADMIN":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not own this session and cannot modify its participants.",
-        )
+    assert_owns_session(s, current_user)
+    assert_session_approved(s)
+    assert_training_mutable(s)
     return session_service.update_scores(
         db, session_id, participant_id, data.pre_test_score, data.post_test_score
     )
@@ -81,9 +80,7 @@ def remove_participant(
     current_user: User = Depends(require_trainer),
 ):
     s = session_service.get_session_or_404(db, session_id)
-    if s.created_by != current_user.id and current_user.role != "ROLE_SYSTEM_ADMIN":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not own this session and cannot modify its participants.",
-        )
+    assert_owns_session(s, current_user)
+    assert_session_approved(s)
+    assert_training_mutable(s)
     session_service.remove_participant(db, session_id, participant_id)

@@ -1,12 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query, Response, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas.auth import LoginRequest, LoginResponse, UserCreate, UserOut
-from app.services.auth_service import login_user, create_user, deactivate_user, list_users
+from app.services.auth_service import (
+    login_user, create_user, deactivate_user, activate_user,
+    list_users, validate_password_strength, complete_setup,
+    change_user_password, clear_auth_cookie,
+)
 from app.core.dependencies import get_current_user, require_system_admin
-from app.core.security import verify_password, hash_password
+from app.core.security import verify_password
+from app.core.rate_limit import check_login_ip_rate_limit
 from app.models.user import User
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -17,9 +22,28 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class SetupPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
 @router.post("/login", response_model=LoginResponse)
-def login(data: LoginRequest, db: Session = Depends(get_db)):
-    return login_user(db, data.username, data.password)
+def login(data: LoginRequest, response: Response, request: Request, db: Session = Depends(get_db)):
+    from app.core.config import settings
+    if settings.is_production:
+        check_login_ip_rate_limit(request)
+    return login_user(db, data.username, data.password, response)
+
+
+@router.post("/logout", status_code=200)
+def logout(response: Response):
+    clear_auth_cookie(response)
+    return {"message": "Logged out successfully."}
+
+
+@router.post("/setup-password", response_model=LoginResponse)
+def setup_password(data: SetupPasswordRequest, response: Response, db: Session = Depends(get_db)):
+    return complete_setup(db, data.token, data.new_password, response)
 
 
 @router.post("/register", response_model=UserOut, status_code=201)
@@ -40,37 +64,28 @@ def me(current_user: User = Depends(get_current_user)):
 @router.post("/change-password", status_code=200)
 def change_password(
     data: ChangePasswordRequest,
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Verify current password
     if not verify_password(data.current_password, current_user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Current password is incorrect.",
         )
-    # Enforce same strength rules as registration
-    from app.services.auth_service import _validate_password_strength
-    _validate_password_strength(data.new_password)
-
-    # Prevent reuse of the same password
-    if verify_password(data.new_password, current_user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="New password must be different from your current password.",
-        )
-
-    current_user.hashed_password = hash_password(data.new_password)
-    db.commit()
-    return {"message": "Password updated successfully."}
+    change_user_password(db, current_user, data.new_password)
+    clear_auth_cookie(response)
+    return {"message": "Password updated successfully. Please log in again."}
 
 
 @router.get("/users", response_model=list[UserOut])
 def get_all_users(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
     _: User = Depends(require_system_admin),
 ):
-    return list_users(db)
+    return list_users(db, skip, limit)
 
 
 @router.patch("/users/{user_id}/deactivate", response_model=UserOut)
@@ -88,10 +103,4 @@ def activate(
     db: Session = Depends(get_db),
     _: User = Depends(require_system_admin),
 ):
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-    user.is_active = True
-    db.commit()
-    db.refresh(user)
-    return user
+    return activate_user(db, user_id)

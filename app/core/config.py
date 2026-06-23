@@ -4,6 +4,13 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
+    # ── App ───────────────────────────────────────────────────────────────────
+    # MUST be defined before DATABASE_URL so its value is available in the
+    # DATABASE_URL validator via info.data (Pydantic validates fields in order).
+    APP_NAME: str = "TrainSMART"
+    APP_VERSION: str = "2.0"
+    ENVIRONMENT: str = "development"  # "development" | "production"
+
     # ── Database ──────────────────────────────────────────────────────────────
     DATABASE_URL: str  # No default — MUST be in .env
 
@@ -11,14 +18,15 @@ class Settings(BaseSettings):
     SECRET_KEY: str    # No default — MUST be in .env
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
-
-    # ── App ───────────────────────────────────────────────────────────────────
-    APP_NAME: str = "TrainSMART"
-    APP_VERSION: str = "2.0"
-    ENVIRONMENT: str = "development"  # "development" | "production"
+    COOKIE_NAME: str = "trainsmart_token"
+    COOKIE_SECURE: bool = False   # set True in production (HTTPS)
+    COOKIE_SAMESITE: str = "lax"
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+
+    # ── Frontend ──────────────────────────────────────────────────────────────
+    FRONTEND_URL: str = "http://localhost:5173"
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     LOGIN_MAX_ATTEMPTS: int = 5
@@ -50,6 +58,13 @@ class Settings(BaseSettings):
         if env == "production" and v.startswith("sqlite"):
             raise ValueError("SQLite cannot be used in production. Use PostgreSQL.")
         return v
+
+    VERIFY_RATE_LIMIT_MAX: int = 30
+    VERIFY_RATE_LIMIT_WINDOW_SECONDS: int = 60
+
+    @property
+    def cookie_secure(self) -> bool:
+        return self.COOKIE_SECURE or self.is_production
 
     @property
     def origins_list(self) -> list[str]:

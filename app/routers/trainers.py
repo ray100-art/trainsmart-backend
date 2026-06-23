@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas.trainer import TrainerCreate, TrainerOut
 from app.services import session_service
-from app.core.dependencies import require_trainer
+from app.core.dependencies import require_trainer, assert_owns_session, assert_session_approved, assert_training_mutable
 from app.models.user import User
 
 router = APIRouter(prefix="/sessions/{session_id}/trainers", tags=["Trainers"])
@@ -18,11 +18,9 @@ def add_trainer(
     current_user: User = Depends(require_trainer),
 ):
     s = session_service.get_session_or_404(db, session_id)
-    if s.created_by != current_user.id and current_user.role != "ROLE_SYSTEM_ADMIN":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not own this session and cannot modify its trainers.",
-        )
+    assert_owns_session(s, current_user)
+    assert_session_approved(s)
+    assert_training_mutable(s)
     return session_service.add_trainer(db, session_id, data.name, data.cadre, data.phone)
 
 
@@ -34,9 +32,7 @@ def remove_trainer(
     current_user: User = Depends(require_trainer),
 ):
     s = session_service.get_session_or_404(db, session_id)
-    if s.created_by != current_user.id and current_user.role != "ROLE_SYSTEM_ADMIN":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not own this session and cannot modify its trainers.",
-        )
+    assert_owns_session(s, current_user)
+    assert_session_approved(s)
+    assert_training_mutable(s)
     session_service.remove_trainer(db, session_id, trainer_id)

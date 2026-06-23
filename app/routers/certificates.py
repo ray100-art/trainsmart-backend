@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.services.certificate_service import issue_certificates, verify_certificate
 from app.schemas.session import SessionOut
 from app.core.dependencies import require_national_admin
+from app.core.rate_limit import check_verify_rate_limit
 
 router = APIRouter(prefix="/certificates", tags=["Certificates"])
 
@@ -20,5 +21,6 @@ def issue(
 
 
 @router.get("/verify/{serial}")
-def verify(serial: str, db: Session = Depends(get_db)):
+def verify(serial: str, request: Request, db: Session = Depends(get_db)):
+    check_verify_rate_limit(request)
     return verify_certificate(db, serial)
