@@ -1,4 +1,4 @@
-from sqlalchemy import func
+from sqlalchemy import func, case, and_
 from sqlalchemy.orm import Session
 
 from app.models.session import TrainingSession
@@ -6,50 +6,53 @@ from app.models.participant import Participant
 
 
 def get_overview_stats(db: Session, county: str | None = None) -> dict:
-    q = db.query(TrainingSession)
+    county_filter = [TrainingSession.county == county] if county else []
+
+    # All session-level counts in a single SQL pass
+    row = db.query(
+        func.count(TrainingSession.id).label("total"),
+        func.count(case((TrainingSession.approval_status == "APPROVED", 1))).label("approved"),
+        func.count(case((TrainingSession.status == "COMPLETED", 1))).label("completed"),
+        func.count(case((TrainingSession.certificates_issued.is_(True), 1))).label("certs_issued"),
+        func.count(case((TrainingSession.approval_status == "PENDING", 1))).label("pending_session"),
+        func.count(case((and_(
+            TrainingSession.report_submitted_at.isnot(None),
+            TrainingSession.report_approval_status == "PENDING",
+        ), 1))).label("pending_report"),
+        func.count(case((and_(
+            TrainingSession.report_approval_status == "APPROVED",
+            TrainingSession.certificates_issued.is_(False),
+        ), 1))).label("ready_certs"),
+    ).filter(*county_filter).one()
+
+    # Participant counts — join only when filtering by county
+    participant_q = db.query(
+        func.count(Participant.id).label("total"),
+        func.count(case((Participant.certificate_serial.isnot(None), 1))).label("certified"),
+    )
     if county:
-        q = q.filter(TrainingSession.county == county)
-    sessions = q.all()
+        participant_q = participant_q.join(
+            TrainingSession, Participant.session_id == TrainingSession.id
+        ).filter(TrainingSession.county == county)
+    prow = participant_q.one()
 
-    total_sessions = len(sessions)
-    approved_sessions = sum(1 for s in sessions if s.approval_status == "APPROVED")
-    completed_sessions = sum(1 for s in sessions if s.status == "COMPLETED")
-    certs_issued = sum(1 for s in sessions if s.certificates_issued)
-    pending_session_approval = sum(1 for s in sessions if s.approval_status == "PENDING")
-    pending_report_approval = sum(
-        1 for s in sessions
-        if s.report_submitted_at and s.report_approval_status == "PENDING"
+    # Per-county session breakdown
+    county_rows = (
+        db.query(TrainingSession.county, func.count(TrainingSession.id).label("cnt"))
+        .filter(*county_filter)
+        .group_by(TrainingSession.county)
+        .all()
     )
-    ready_for_certs = sum(
-        1 for s in sessions
-        if s.report_approval_status == "APPROVED" and not s.certificates_issued
-    )
-
-    session_ids = [s.id for s in sessions]
-    total_participants = 0
-    certified_participants = 0
-    if session_ids:
-        total_participants = db.query(func.count(Participant.id)).filter(
-            Participant.session_id.in_(session_ids)
-        ).scalar() or 0
-        certified_participants = db.query(func.count(Participant.id)).filter(
-            Participant.session_id.in_(session_ids),
-            Participant.certificate_serial.isnot(None),
-        ).scalar() or 0
-
-    by_county: dict[str, int] = {}
-    for s in sessions:
-        by_county[s.county] = by_county.get(s.county, 0) + 1
 
     return {
-        "total_sessions": total_sessions,
-        "approved_sessions": approved_sessions,
-        "completed_sessions": completed_sessions,
-        "certificates_issued_sessions": certs_issued,
-        "pending_session_approvals": pending_session_approval,
-        "pending_report_approvals": pending_report_approval,
-        "ready_for_certificates": ready_for_certs,
-        "total_participants": total_participants,
-        "certified_participants": certified_participants,
-        "sessions_by_county": by_county,
+        "total_sessions":              row.total,
+        "approved_sessions":           row.approved,
+        "completed_sessions":          row.completed,
+        "certificates_issued_sessions": row.certs_issued,
+        "pending_session_approvals":   row.pending_session,
+        "pending_report_approvals":    row.pending_report,
+        "ready_for_certificates":      row.ready_certs,
+        "total_participants":          prow.total,
+        "certified_participants":      prow.certified,
+        "sessions_by_county":          {r.county: r.cnt for r in county_rows},
     }

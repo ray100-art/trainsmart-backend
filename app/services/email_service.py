@@ -2,12 +2,15 @@
 TrainSMART Email Service
 Sends email notifications for account creation and certificate issuance.
 """
+import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from app.core.config import settings
 from app.lib.html_escape import esc
+
+logger = logging.getLogger(__name__)
 
 
 def _send_email(to_email: str, subject: str, html_body: str) -> bool:
@@ -25,10 +28,10 @@ def _send_email(to_email: str, subject: str, html_body: str) -> bool:
             server.login(settings.EMAIL_FROM, settings.EMAIL_PASSWORD)
             server.sendmail(settings.EMAIL_FROM, to_email, msg.as_string())
 
-        print(f"[EMAIL] Sent '{subject}' to {to_email}")
+        logger.info("Sent '%s' to %s", subject, to_email)
         return True
-    except Exception as e:
-        print(f"[EMAIL ERROR] Failed to send to {to_email}: {e}")
+    except Exception as exc:
+        logger.error("Failed to send '%s' to %s: %s", subject, to_email, exc)
         return False
 
 

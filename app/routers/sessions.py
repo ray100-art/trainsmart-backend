@@ -64,7 +64,7 @@ def update_session(
     assert_owns_session(s, current_user)
     if data.county is not None:
         assert_trainer_county(data.county, current_user)
-    return session_service.update_session(db, session_id, data)
+    return session_service.update_session(db, s, data)
 
 
 @router.delete("/{session_id}", status_code=204)
@@ -75,7 +75,7 @@ def delete_session(
 ):
     s = session_service.get_session_or_404(db, session_id)
     assert_owns_session(s, current_user)
-    session_service.delete_session(db, session_id)
+    session_service.delete_session(db, s)
 
 
 @router.patch("/{session_id}/approve", response_model=SessionOut)
@@ -86,7 +86,7 @@ def approve_session(
 ):
     s = session_service.get_session_or_404(db, session_id)
     assert_county_access(s, current_user)
-    return session_service.approve_session(db, session_id, current_user.id)
+    return session_service.approve_session(db, s, current_user.id)
 
 
 @router.patch("/{session_id}/reject", response_model=SessionOut)
@@ -98,7 +98,7 @@ def reject_session(
 ):
     s = session_service.get_session_or_404(db, session_id)
     assert_county_access(s, current_user)
-    return session_service.reject_session(db, session_id, data.note, current_user.id)
+    return session_service.reject_session(db, s, data.note, current_user.id)
 
 
 @router.patch("/{session_id}/report", response_model=SessionOut)
@@ -110,7 +110,7 @@ def submit_report(
 ):
     s = session_service.get_session_or_404(db, session_id)
     assert_owns_session(s, current_user)
-    return session_service.submit_report(db, session_id, data)
+    return session_service.submit_report(db, s, data)
 
 
 @router.patch("/{session_id}/report/approve", response_model=SessionOut)
@@ -121,7 +121,7 @@ def approve_report(
 ):
     s = session_service.get_session_or_404(db, session_id)
     assert_county_access(s, current_user)
-    return session_service.approve_report(db, session_id)
+    return session_service.approve_report(db, s)
 
 
 @router.patch("/{session_id}/report/reject", response_model=SessionOut)
@@ -133,4 +133,4 @@ def reject_report(
 ):
     s = session_service.get_session_or_404(db, session_id)
     assert_county_access(s, current_user)
-    return session_service.reject_report(db, session_id, data.note)
+    return session_service.reject_report(db, s, data.note)

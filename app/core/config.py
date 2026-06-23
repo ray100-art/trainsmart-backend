@@ -5,14 +5,15 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     # ── App ───────────────────────────────────────────────────────────────────
-    # MUST be defined before DATABASE_URL so its value is available in the
-    # DATABASE_URL validator via info.data (Pydantic validates fields in order).
     APP_NAME: str = "TrainSMART"
     APP_VERSION: str = "2.0"
     ENVIRONMENT: str = "development"  # "development" | "production"
 
     # ── Database ──────────────────────────────────────────────────────────────
     DATABASE_URL: str  # No default — MUST be in .env
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_RECYCLE: int = 1800  # 30 min — recycle connections before PostgreSQL's idle timeout
 
     # ── JWT ───────────────────────────────────────────────────────────────────
     SECRET_KEY: str    # No default — MUST be in .env
@@ -39,6 +40,10 @@ class Settings(BaseSettings):
     EMAIL_PORT: int = 587
     EMAIL_ENABLED: bool = True
 
+    # ── Rate limit (verify endpoint) ──────────────────────────────────────────
+    VERIFY_RATE_LIMIT_MAX: int = 30
+    VERIFY_RATE_LIMIT_WINDOW_SECONDS: int = 60
+
     @field_validator("SECRET_KEY")
     @classmethod
     def secret_key_must_be_strong(cls, v: str) -> str:
@@ -59,12 +64,24 @@ class Settings(BaseSettings):
             raise ValueError("SQLite cannot be used in production. Use PostgreSQL.")
         return v
 
-    VERIFY_RATE_LIMIT_MAX: int = 30
-    VERIFY_RATE_LIMIT_WINDOW_SECONDS: int = 60
+    @field_validator("COOKIE_SAMESITE")
+    @classmethod
+    def cookie_samesite_valid(cls, v: str) -> str:
+        allowed = {"strict", "lax", "none"}
+        if v.lower() not in allowed:
+            raise ValueError(f"COOKIE_SAMESITE must be one of: {', '.join(sorted(allowed))}.")
+        return v.lower()
 
     @property
     def cookie_secure(self) -> bool:
         return self.COOKIE_SECURE or self.is_production
+
+    @property
+    def cookie_samesite_effective(self) -> str:
+        # Upgrade to 'strict' in production unless operator explicitly chose 'lax'
+        if self.is_production and self.COOKIE_SAMESITE == "none":
+            return "lax"
+        return self.COOKIE_SAMESITE
 
     @property
     def origins_list(self) -> list[str]:

@@ -37,7 +37,7 @@ def add_participant(
     assert_session_approved(s)
     assert_training_mutable(s)
     return session_service.add_participant(
-        db, session_id, data.name, data.cadre, data.facility, data.status, data.staff_number
+        db, s, data.name, data.cadre, data.facility, data.status, data.staff_number
     )
 
 
@@ -83,4 +83,4 @@ def remove_participant(
     assert_owns_session(s, current_user)
     assert_session_approved(s)
     assert_training_mutable(s)
-    session_service.remove_participant(db, session_id, participant_id)
+    session_service.remove_participant(db, s, participant_id)

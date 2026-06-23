@@ -1,5 +1,6 @@
 import uuid
 import secrets
+import logging
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from threading import Lock
@@ -14,6 +15,8 @@ from app.core.config import settings
 from app.lib.county import normalize_county
 from app.services.email_service import send_welcome_email
 from app.services.audit_service import log_action
+
+logger = logging.getLogger(__name__)
 
 VALID_ROLES = {
     "ROLE_TRAINER",
@@ -34,6 +37,8 @@ SETUP_TOKEN_HOURS = 48
 
 def _check_rate_limit(identifier: str) -> None:
     with _lock:
+        if identifier not in _login_attempts:
+            return
         record = _login_attempts[identifier]
         now = datetime.now(timezone.utc)
         if record["locked_until"] and now < record["locked_until"]:
@@ -43,8 +48,8 @@ def _check_rate_limit(identifier: str) -> None:
                 detail=f"Account temporarily locked. Try again in {remaining} minute(s).",
             )
         if record["locked_until"] and now >= record["locked_until"]:
-            record["count"] = 0
-            record["locked_until"] = None
+            # Lockout expired — remove the entry so memory doesn't accumulate
+            _login_attempts.pop(identifier, None)
 
 
 def _record_failed_attempt(identifier: str) -> None:
@@ -102,7 +107,7 @@ def _set_auth_cookie(response: Response, token: str) -> None:
         value=token,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite=settings.COOKIE_SAMESITE,
+        samesite=settings.cookie_samesite_effective,
         max_age=max_age,
         path="/",
     )
@@ -153,21 +158,25 @@ def create_user(db: Session, data: UserCreate, background_tasks: BackgroundTasks
     db.refresh(user)
 
     if settings.EMAIL_ENABLED and user.email:
-        email_fn = lambda: send_welcome_email(
-            to_email=user.email,
-            full_name=user.full_name,
-            username=user.username,
-            setup_url=f"{settings.FRONTEND_URL}/setup-password?token={setup_token}",
-            role=user.role,
-            county=user.county,
-        )
+        setup_url = f"{settings.FRONTEND_URL}/setup-password?token={setup_token}"
+
+        def _send():
+            send_welcome_email(
+                to_email=user.email,
+                full_name=user.full_name,
+                username=user.username,
+                setup_url=setup_url,
+                role=user.role,
+                county=user.county,
+            )
+
         if background_tasks:
-            background_tasks.add_task(email_fn)
+            background_tasks.add_task(_send)
         else:
             try:
-                email_fn()
-            except Exception as e:
-                print(f"[EMAIL WARNING] Welcome email failed for {user.email}: {e}")
+                _send()
+            except Exception as exc:
+                logger.warning("Welcome email failed for %s: %s", user.email, exc)
 
     return user
 
@@ -198,11 +207,11 @@ def login_user(db: Session, username: str, password: str, response: Response) ->
     token = _build_token(user)
     _set_auth_cookie(response, token)
     return {
-        "token": token,
-        "role": user.role,
-        "county": user.county,
-        "username": user.username,
-        "full_name": user.full_name,
+        "token":        token,
+        "role":         user.role,
+        "county":       user.county,
+        "username":     user.username,
+        "full_name":    user.full_name,
         "staff_number": user.staff_number,
     }
 
@@ -219,21 +228,21 @@ def complete_setup(db: Session, token: str, new_password: str, response: Respons
         if datetime.now(timezone.utc) > expires:
             raise HTTPException(status_code=400, detail="Setup link has expired. Contact your administrator.")
 
-    user.hashed_password = hash_password(new_password)
-    user.setup_token = None
-    user.setup_token_expires = None
-    user.token_version = (user.token_version or 0) + 1
+    user.hashed_password      = hash_password(new_password)
+    user.setup_token          = None
+    user.setup_token_expires  = None
+    user.token_version        = (user.token_version or 0) + 1
     db.commit()
     db.refresh(user)
 
     jwt_token = _build_token(user)
     _set_auth_cookie(response, jwt_token)
     return {
-        "token": jwt_token,
-        "role": user.role,
-        "county": user.county,
-        "username": user.username,
-        "full_name": user.full_name,
+        "token":        jwt_token,
+        "role":         user.role,
+        "county":       user.county,
+        "username":     user.username,
+        "full_name":    user.full_name,
         "staff_number": user.staff_number,
     }
 
@@ -245,9 +254,9 @@ def change_user_password(db: Session, user: User, new_password: str) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="New password must be different from your current password.",
         )
-    user.hashed_password = hash_password(new_password)
-    user.token_version = (user.token_version or 0) + 1
-    user.setup_token = None
+    user.hashed_password     = hash_password(new_password)
+    user.token_version       = (user.token_version or 0) + 1
+    user.setup_token         = None
     user.setup_token_expires = None
     db.commit()
 
@@ -260,7 +269,7 @@ def deactivate_user(db: Session, user_id: str, requesting_user: User) -> User:
         raise HTTPException(status_code=404, detail="User not found.")
     if user.id == requesting_user.id:
         raise HTTPException(status_code=400, detail="You cannot deactivate your own account.")
-    user.is_active = False
+    user.is_active     = False
     user.token_version = (user.token_version or 0) + 1
     db.commit()
     db.refresh(user)

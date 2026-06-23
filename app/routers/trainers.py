@@ -21,7 +21,7 @@ def add_trainer(
     assert_owns_session(s, current_user)
     assert_session_approved(s)
     assert_training_mutable(s)
-    return session_service.add_trainer(db, session_id, data.name, data.cadre, data.phone)
+    return session_service.add_trainer(db, s, data.name, data.cadre, data.phone)
 
 
 @router.delete("/{trainer_id}", status_code=204)

@@ -3,13 +3,27 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 from app.core.config import settings
 
-# SQLite needs check_same_thread=False; PostgreSQL doesn't need it
-connect_args = {"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {}
+_is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+
+connect_args = {"check_same_thread": False} if _is_sqlite else {}
+
+# SQLite doesn't support connection pooling options; PostgreSQL does.
+_pool_kwargs = (
+    {}
+    if _is_sqlite
+    else {
+        "pool_size":     settings.DB_POOL_SIZE,
+        "max_overflow":  settings.DB_MAX_OVERFLOW,
+        "pool_recycle":  settings.DB_POOL_RECYCLE,
+        "pool_timeout":  30,
+    }
+)
 
 engine = create_engine(
     settings.DATABASE_URL,
     connect_args=connect_args,
     pool_pre_ping=True,
+    **_pool_kwargs,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

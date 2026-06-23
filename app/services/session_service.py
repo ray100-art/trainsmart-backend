@@ -11,7 +11,6 @@ from app.models.user import User
 from app.lib.county import normalize_county
 from app.schemas.session import SessionCreate, SessionUpdate, TrainingReportSchema, SessionOut
 
-# Fields that materially change the session and require re-approval.
 _APPROVAL_SENSITIVE_FIELDS = {"county", "facility", "start_date", "end_date"}
 _SESSION_LOAD_OPTIONS = (
     selectinload(TrainingSession.participants),
@@ -23,13 +22,16 @@ def _session_query(db: Session):
     return db.query(TrainingSession).options(*_SESSION_LOAD_OPTIONS)
 
 
-def to_session_out(db: Session, session: TrainingSession) -> SessionOut:
-    """Serialize a session and resolve reviewer display name."""
+def to_session_out(db: Session, session: TrainingSession, reviewer_map: dict[str, str] | None = None) -> SessionOut:
     out = SessionOut.model_validate(session)
     if session.approved_by:
-        reviewer = db.query(User).filter(User.id == session.approved_by).first()
-        if reviewer:
-            out = out.model_copy(update={"approved_by_name": reviewer.full_name})
+        if reviewer_map is not None:
+            name = reviewer_map.get(session.approved_by)
+        else:
+            reviewer = db.query(User.full_name).filter(User.id == session.approved_by).scalar()
+            name = reviewer
+        if name:
+            out = out.model_copy(update={"approved_by_name": name})
     return out
 
 
@@ -40,7 +42,15 @@ def get_all_sessions(
     if county:
         q = q.filter(TrainingSession.county == county)
     sessions = q.order_by(TrainingSession.created_at.desc()).offset(skip).limit(limit).all()
-    return [to_session_out(db, s) for s in sessions]
+
+    # Batch-load all reviewer names in one query instead of one query per session
+    reviewer_ids = {s.approved_by for s in sessions if s.approved_by}
+    reviewer_map: dict[str, str] = {}
+    if reviewer_ids:
+        rows = db.query(User.id, User.full_name).filter(User.id.in_(reviewer_ids)).all()
+        reviewer_map = {r.id: r.full_name for r in rows}
+
+    return [to_session_out(db, s, reviewer_map) for s in sessions]
 
 
 def get_session_or_404(db: Session, session_id: str) -> TrainingSession:
@@ -71,9 +81,8 @@ def create_session(db: Session, data: SessionCreate, created_by: str) -> Session
     return to_session_out(db, s)
 
 
-def update_session(db: Session, session_id: str, data: SessionUpdate) -> SessionOut:
-    s = get_session_or_404(db, session_id)
-    if s.certificates_issued:
+def update_session(db: Session, session: TrainingSession, data: SessionUpdate) -> SessionOut:
+    if session.certificates_issued:
         raise HTTPException(
             status_code=400,
             detail="Cannot edit a session after certificates have been issued.",
@@ -81,121 +90,112 @@ def update_session(db: Session, session_id: str, data: SessionUpdate) -> Session
 
     updates = data.model_dump(exclude_none=True)
 
-    new_start = updates.get("start_date", s.start_date)
-    new_end   = updates.get("end_date",   s.end_date)
+    new_start = updates.get("start_date", session.start_date)
+    new_end   = updates.get("end_date",   session.end_date)
     if new_start and new_end and new_start > new_end:
         raise HTTPException(status_code=400, detail="start_date must be before or equal to end_date.")
 
     for field, value in updates.items():
         if field == "county" and value is not None:
             value = normalize_county(value)
-        setattr(s, field, value)
+        setattr(session, field, value)
 
-    # Only reset approval to PENDING if a material field changed AND the session
-    # was already approved (but certs haven't been issued yet).
     material_change = bool(updates.keys() & _APPROVAL_SENSITIVE_FIELDS)
-    if material_change and s.approval_status == "APPROVED" and not s.certificates_issued:
-        s.approval_status = "PENDING"
-        s.approval_note = None
+    if material_change and session.approval_status == "APPROVED" and not session.certificates_issued:
+        session.approval_status = "PENDING"
+        session.approval_note = None
 
     db.commit()
-    db.refresh(s)
-    return to_session_out(db, s)
+    db.refresh(session)
+    return to_session_out(db, session)
 
 
-def delete_session(db: Session, session_id: str) -> None:
-    s = get_session_or_404(db, session_id)
-    if s.certificates_issued:
+def delete_session(db: Session, session: TrainingSession) -> None:
+    if session.certificates_issued:
         raise HTTPException(
             status_code=400,
             detail="Cannot delete a session after certificates have been issued.",
         )
-    db.delete(s)
+    db.delete(session)
     db.commit()
 
 
-def approve_session(db: Session, session_id: str, reviewed_by: str) -> SessionOut:
-    s = get_session_or_404(db, session_id)
-    if s.approval_status == "APPROVED":
+def approve_session(db: Session, session: TrainingSession, reviewed_by: str) -> SessionOut:
+    if session.approval_status == "APPROVED":
         raise HTTPException(status_code=400, detail="Session is already approved.")
-    s.approval_status = "APPROVED"
-    s.approved_by     = reviewed_by
-    s.approval_note   = None
+    session.approval_status = "APPROVED"
+    session.approved_by     = reviewed_by
+    session.approval_note   = None
     db.commit()
-    db.refresh(s)
-    return to_session_out(db, s)
+    db.refresh(session)
+    return to_session_out(db, session)
 
 
-def reject_session(db: Session, session_id: str, note: str, reviewed_by: str) -> SessionOut:
-    s = get_session_or_404(db, session_id)
-    if s.approval_status == "REJECTED":
+def reject_session(db: Session, session: TrainingSession, note: str, reviewed_by: str) -> SessionOut:
+    if session.approval_status == "REJECTED":
         raise HTTPException(status_code=400, detail="Session is already rejected.")
-    if s.approval_status == "APPROVED" and len(s.participants) > 0:
+    if session.approval_status == "APPROVED" and len(session.participants) > 0:
         raise HTTPException(
             status_code=400,
             detail="Cannot reject an approved session that already has registered participants.",
         )
-    s.approval_status = "REJECTED"
-    s.approval_note   = note
-    s.approved_by     = reviewed_by
+    session.approval_status = "REJECTED"
+    session.approval_note   = note
+    session.approved_by     = reviewed_by
     db.commit()
-    db.refresh(s)
-    return to_session_out(db, s)
+    db.refresh(session)
+    return to_session_out(db, session)
 
 
-def submit_report(db: Session, session_id: str, report: TrainingReportSchema) -> SessionOut:
-    s = get_session_or_404(db, session_id)
-    if s.approval_status != "APPROVED":
+def submit_report(db: Session, session: TrainingSession, report: TrainingReportSchema) -> SessionOut:
+    if session.approval_status != "APPROVED":
         raise HTTPException(
             status_code=400,
             detail="Session must be approved before submitting a report.",
         )
-    if s.certificates_issued:
+    if session.certificates_issued:
         raise HTTPException(status_code=400, detail="Cannot submit a report after certificates have been issued.")
-    if s.report_approval_status == "APPROVED":
+    if session.report_approval_status == "APPROVED":
         raise HTTPException(status_code=400, detail="Report is already approved and cannot be resubmitted.")
-    if s.report_approval_status == "PENDING" and s.report_submitted_at:
+    if session.report_approval_status == "PENDING" and session.report_submitted_at:
         raise HTTPException(status_code=400, detail="Report is awaiting approval and cannot be modified.")
-    s.report_summary         = report.summary
-    s.report_challenges      = report.challenges
-    s.report_recommendations = report.recommendations
-    s.report_submitted_at    = date.today()
-    s.report_approval_status = "PENDING"
-    s.report_approval_note   = None
-    s.status                 = "COMPLETED"
+    session.report_summary         = report.summary
+    session.report_challenges      = report.challenges
+    session.report_recommendations = report.recommendations
+    session.report_submitted_at    = date.today()
+    session.report_approval_status = "PENDING"
+    session.report_approval_note   = None
+    session.status                 = "COMPLETED"
     db.commit()
-    db.refresh(s)
-    return to_session_out(db, s)
+    db.refresh(session)
+    return to_session_out(db, session)
 
 
-def approve_report(db: Session, session_id: str) -> SessionOut:
-    s = get_session_or_404(db, session_id)
-    if not s.report_submitted_at:
+def approve_report(db: Session, session: TrainingSession) -> SessionOut:
+    if not session.report_submitted_at:
         raise HTTPException(status_code=400, detail="No report has been submitted for this session.")
-    if s.report_approval_status == "APPROVED":
+    if session.report_approval_status == "APPROVED":
         raise HTTPException(status_code=400, detail="Report is already approved.")
-    s.report_approval_status = "APPROVED"
-    s.report_approval_note   = None
+    session.report_approval_status = "APPROVED"
+    session.report_approval_note   = None
     db.commit()
-    db.refresh(s)
-    return to_session_out(db, s)
+    db.refresh(session)
+    return to_session_out(db, session)
 
 
-def reject_report(db: Session, session_id: str, note: str) -> SessionOut:
-    s = get_session_or_404(db, session_id)
-    if s.report_approval_status == "REJECTED":
+def reject_report(db: Session, session: TrainingSession, note: str) -> SessionOut:
+    if session.report_approval_status == "REJECTED":
         raise HTTPException(status_code=400, detail="Report is already rejected.")
-    s.report_approval_status = "REJECTED"
-    s.report_approval_note   = note
+    session.report_approval_status = "REJECTED"
+    session.report_approval_note   = note
     db.commit()
-    db.refresh(s)
-    return to_session_out(db, s)
+    db.refresh(session)
+    return to_session_out(db, session)
 
 
 # ── Participants ───────────────────────────────────────────────────────────────
 
 def _sync_trainee_count(db: Session, s: TrainingSession) -> None:
-    """Recompute trainee_count from the DB to prevent drift from manual inc/dec."""
     s.trainee_count = db.query(func.count(Participant.id)).filter(
         Participant.session_id == s.id
     ).scalar() or 0
@@ -203,17 +203,16 @@ def _sync_trainee_count(db: Session, s: TrainingSession) -> None:
 
 def add_participant(
     db: Session,
-    session_id: str,
+    session: TrainingSession,
     name: str,
     cadre: str,
     facility: str,
     status: str = "PRESENT",
     staff_number: str | None = None,
 ) -> Participant:
-    s = get_session_or_404(db, session_id)
     p = Participant(
         id=str(uuid.uuid4()),
-        session_id=session_id,
+        session_id=session.id,
         name=name,
         cadre=cadre,
         facility=facility,
@@ -222,7 +221,7 @@ def add_participant(
     )
     db.add(p)
     db.flush()
-    _sync_trainee_count(db, s)
+    _sync_trainee_count(db, session)
     db.commit()
     db.refresh(p)
     return p
@@ -267,27 +266,25 @@ def update_scores(
     return p
 
 
-def remove_participant(db: Session, session_id: str, participant_id: str) -> None:
-    s = get_session_or_404(db, session_id)
+def remove_participant(db: Session, session: TrainingSession, participant_id: str) -> None:
     p = db.query(Participant).filter(
         Participant.id == participant_id,
-        Participant.session_id == session_id
+        Participant.session_id == session.id
     ).first()
     if not p:
         raise HTTPException(status_code=404, detail="Participant not found.")
     db.delete(p)
     db.flush()
-    _sync_trainee_count(db, s)
+    _sync_trainee_count(db, session)
     db.commit()
 
 
 # ── Trainers ───────────────────────────────────────────────────────────────────
 
-def add_trainer(db: Session, session_id: str, name: str, cadre: str, phone: str) -> SessionTrainer:
-    get_session_or_404(db, session_id)
+def add_trainer(db: Session, session: TrainingSession, name: str, cadre: str, phone: str) -> SessionTrainer:
     t = SessionTrainer(
         id=str(uuid.uuid4()),
-        session_id=session_id,
+        session_id=session.id,
         name=name,
         cadre=cadre,
         phone=phone,

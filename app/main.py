@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -5,7 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.database import get_db
+from app.database import get_db, engine
 from app.routers import auth, sessions, participants, trainers, certificates, stats
 
 # Tables are managed exclusively by Alembic migrations.
@@ -13,17 +15,25 @@ from app.routers import auth, sessions, participants, trainers, certificates, st
 # and silently skips columns added in later migrations.
 # Run:  alembic upgrade head
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    engine.dispose()
+
+
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description="National Healthcare Training Registry - NASCOP - MOH Kenya",
     docs_url="/docs" if settings.docs_enabled else None,
     redoc_url="/redoc" if settings.docs_enabled else None,
+    lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.origins_list,   # reads ALLOWED_ORIGINS from .env
+    allow_origins=settings.origins_list,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
