@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: trainsmart-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && alembic upgrade head && python seed.py
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.9"
+      - key: ENVIRONMENT
+        value: production
+      - key: EMAIL_ENABLED
+        value: "false"
+      - key: RATE_LIMIT_STORAGE
+        value: database
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: FRONTEND_URL
+        sync: false

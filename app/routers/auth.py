@@ -51,9 +51,9 @@ def register(
     data: UserCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    _: User = Depends(require_system_admin),
+    current_user: User = Depends(require_system_admin),
 ):
-    return create_user(db, data, background_tasks)
+    return create_user(db, data, background_tasks, requesting_user_id=current_user.id)
 
 
 @router.get("/me", response_model=UserOut)
@@ -101,6 +101,6 @@ def deactivate(
 def activate(
     user_id: str,
     db: Session = Depends(get_db),
-    _: User = Depends(require_system_admin),
+    current_user: User = Depends(require_system_admin),
 ):
-    return activate_user(db, user_id)
+    return activate_user(db, user_id, requesting_user_id=current_user.id)

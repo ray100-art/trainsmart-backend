@@ -29,7 +29,8 @@ def list_sessions(
     current_user: User = Depends(require_any_staff),
 ):
     effective_county = resolve_list_county(current_user, county)
-    return session_service.get_all_sessions(db, effective_county, skip, limit)
+    created_by = current_user.id if current_user.role == "ROLE_TRAINER" else None
+    return session_service.get_all_sessions(db, effective_county, skip, limit, created_by=created_by)
 
 
 @router.get("/{session_id}", response_model=SessionOut)
@@ -64,7 +65,7 @@ def update_session(
     assert_owns_session(s, current_user)
     if data.county is not None:
         assert_trainer_county(data.county, current_user)
-    return session_service.update_session(db, s, data)
+    return session_service.update_session(db, s, data, user_id=current_user.id)
 
 
 @router.delete("/{session_id}", status_code=204)
@@ -75,7 +76,7 @@ def delete_session(
 ):
     s = session_service.get_session_or_404(db, session_id)
     assert_owns_session(s, current_user)
-    session_service.delete_session(db, s)
+    session_service.delete_session(db, s, user_id=current_user.id)
 
 
 @router.patch("/{session_id}/approve", response_model=SessionOut)
@@ -110,7 +111,7 @@ def submit_report(
 ):
     s = session_service.get_session_or_404(db, session_id)
     assert_owns_session(s, current_user)
-    return session_service.submit_report(db, s, data)
+    return session_service.submit_report(db, s, data, submitted_by=current_user.id)
 
 
 @router.patch("/{session_id}/report/approve", response_model=SessionOut)
@@ -121,7 +122,7 @@ def approve_report(
 ):
     s = session_service.get_session_or_404(db, session_id)
     assert_county_access(s, current_user)
-    return session_service.approve_report(db, s)
+    return session_service.approve_report(db, s, reviewed_by=current_user.id)
 
 
 @router.patch("/{session_id}/report/reject", response_model=SessionOut)
@@ -133,4 +134,4 @@ def reject_report(
 ):
     s = session_service.get_session_or_404(db, session_id)
     assert_county_access(s, current_user)
-    return session_service.reject_report(db, s, data.note)
+    return session_service.reject_report(db, s, data.note, reviewed_by=current_user.id)

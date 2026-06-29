@@ -48,7 +48,6 @@ def _check_rate_limit(identifier: str) -> None:
                 detail=f"Account temporarily locked. Try again in {remaining} minute(s).",
             )
         if record["locked_until"] and now >= record["locked_until"]:
-            # Lockout expired — remove the entry so memory doesn't accumulate
             _login_attempts.pop(identifier, None)
 
 
@@ -126,7 +125,12 @@ def _build_token(user: User) -> str:
     })
 
 
-def create_user(db: Session, data: UserCreate, background_tasks: BackgroundTasks | None = None) -> User:
+def create_user(
+    db: Session,
+    data: UserCreate,
+    background_tasks: BackgroundTasks | None = None,
+    requesting_user_id: str | None = None,
+) -> User:
     validate_password_strength(data.password)
     _validate_role(data.role)
 
@@ -154,6 +158,10 @@ def create_user(db: Session, data: UserCreate, background_tasks: BackgroundTasks
         setup_token_expires=setup_expires,
     )
     db.add(user)
+    db.flush()
+    log_action(db, user_id=requesting_user_id, action="CREATE_USER",
+               entity_type="user", entity_id=user.id,
+               detail=f"{user.username} ({user.role}, {user.county})")
     db.commit()
     db.refresh(user)
 
@@ -206,6 +214,9 @@ def login_user(db: Session, username: str, password: str, response: Response) ->
     user = authenticate_user(db, username, password)
     token = _build_token(user)
     _set_auth_cookie(response, token)
+    log_action(db, user_id=user.id, action="LOGIN",
+               entity_type="user", entity_id=user.id)
+    db.commit()
     return {
         "token":        token,
         "role":         user.role,
@@ -232,6 +243,8 @@ def complete_setup(db: Session, token: str, new_password: str, response: Respons
     user.setup_token          = None
     user.setup_token_expires  = None
     user.token_version        = (user.token_version or 0) + 1
+    log_action(db, user_id=user.id, action="SETUP_PASSWORD",
+               entity_type="user", entity_id=user.id)
     db.commit()
     db.refresh(user)
 
@@ -258,6 +271,8 @@ def change_user_password(db: Session, user: User, new_password: str) -> None:
     user.token_version       = (user.token_version or 0) + 1
     user.setup_token         = None
     user.setup_token_expires = None
+    log_action(db, user_id=user.id, action="CHANGE_PASSWORD",
+               entity_type="user", entity_id=user.id)
     db.commit()
 
 
@@ -271,16 +286,22 @@ def deactivate_user(db: Session, user_id: str, requesting_user: User) -> User:
         raise HTTPException(status_code=400, detail="You cannot deactivate your own account.")
     user.is_active     = False
     user.token_version = (user.token_version or 0) + 1
+    log_action(db, user_id=requesting_user.id, action="DEACTIVATE_USER",
+               entity_type="user", entity_id=user.id,
+               detail=user.username)
     db.commit()
     db.refresh(user)
     return user
 
 
-def activate_user(db: Session, user_id: str) -> User:
+def activate_user(db: Session, user_id: str, requesting_user_id: str | None = None) -> User:
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
     user.is_active = True
+    log_action(db, user_id=requesting_user_id, action="ACTIVATE_USER",
+               entity_type="user", entity_id=user.id,
+               detail=user.username)
     db.commit()
     db.refresh(user)
     return user

@@ -10,11 +10,15 @@ from app.models.trainer import SessionTrainer
 from app.models.user import User
 from app.lib.county import normalize_county
 from app.schemas.session import SessionCreate, SessionUpdate, TrainingReportSchema, SessionOut
+from app.models.training_program import TrainingProgram
+from app.services.program_service import get_program_or_404
+from app.services.audit_service import log_action
 
 _APPROVAL_SENSITIVE_FIELDS = {"county", "facility", "start_date", "end_date"}
 _SESSION_LOAD_OPTIONS = (
     selectinload(TrainingSession.participants),
     selectinload(TrainingSession.trainers),
+    selectinload(TrainingSession.program),
 )
 
 
@@ -24,27 +28,51 @@ def _session_query(db: Session):
 
 def to_session_out(db: Session, session: TrainingSession, reviewer_map: dict[str, str] | None = None) -> SessionOut:
     out = SessionOut.model_validate(session)
+
+    # Resolve session approver name
     if session.approved_by:
         if reviewer_map is not None:
             name = reviewer_map.get(session.approved_by)
         else:
-            reviewer = db.query(User.full_name).filter(User.id == session.approved_by).scalar()
-            name = reviewer
+            name = db.query(User.full_name).filter(User.id == session.approved_by).scalar()
         if name:
             out = out.model_copy(update={"approved_by_name": name})
+
+    # Resolve report approver name
+    if session.report_approved_by:
+        if reviewer_map is not None:
+            rname = reviewer_map.get(session.report_approved_by)
+        else:
+            rname = db.query(User.full_name).filter(User.id == session.report_approved_by).scalar()
+        if rname:
+            out = out.model_copy(update={"report_approved_by_name": rname})
+
+    if session.program:
+        out = out.model_copy(update={
+            "program_code": session.program.code,
+            "program_name": session.program.name,
+        })
+
     return out
 
 
 def get_all_sessions(
-    db: Session, county: str | None = None, skip: int = 0, limit: int = 100
+    db: Session,
+    county: str | None = None,
+    skip: int = 0,
+    limit: int = 100,
+    created_by: str | None = None,
 ) -> list[SessionOut]:
     q = _session_query(db)
     if county:
         q = q.filter(TrainingSession.county == county)
+    if created_by:
+        q = q.filter(TrainingSession.created_by == created_by)
     sessions = q.order_by(TrainingSession.created_at.desc()).offset(skip).limit(limit).all()
 
     # Batch-load all reviewer names in one query instead of one query per session
-    reviewer_ids = {s.approved_by for s in sessions if s.approved_by}
+    reviewer_ids = {s.approved_by for s in sessions if s.approved_by} | \
+                   {s.report_approved_by for s in sessions if s.report_approved_by}
     reviewer_map: dict[str, str] = {}
     if reviewer_ids:
         rows = db.query(User.id, User.full_name).filter(User.id.in_(reviewer_ids)).all()
@@ -65,9 +93,17 @@ def get_session_out_or_404(db: Session, session_id: str) -> SessionOut:
 
 
 def create_session(db: Session, data: SessionCreate, created_by: str) -> SessionOut:
+    program_id = None
+    if data.program_id:
+        program = get_program_or_404(db, data.program_id)
+        if not program.is_active:
+            raise HTTPException(status_code=400, detail="Selected training program is not active.")
+        program_id = program.id
+
     s = TrainingSession(
         id=str(uuid.uuid4()),
         title=data.title,
+        program_id=program_id,
         county=normalize_county(data.county),
         facility=data.facility,
         start_date=data.start_date,
@@ -76,12 +112,18 @@ def create_session(db: Session, data: SessionCreate, created_by: str) -> Session
         created_by=created_by,
     )
     db.add(s)
+    db.flush()
+    log_action(db, user_id=created_by, action="CREATE_SESSION",
+               entity_type="session", entity_id=s.id, detail=s.title)
     db.commit()
     db.refresh(s)
     return to_session_out(db, s)
 
 
-def update_session(db: Session, session: TrainingSession, data: SessionUpdate) -> SessionOut:
+def update_session(
+    db: Session, session: TrainingSession, data: SessionUpdate,
+    user_id: str | None = None,
+) -> SessionOut:
     if session.certificates_issued:
         raise HTTPException(
             status_code=400,
@@ -98,6 +140,11 @@ def update_session(db: Session, session: TrainingSession, data: SessionUpdate) -
     for field, value in updates.items():
         if field == "county" and value is not None:
             value = normalize_county(value)
+        if field == "program_id" and value is not None:
+            program = get_program_or_404(db, value)
+            if not program.is_active:
+                raise HTTPException(status_code=400, detail="Selected training program is not active.")
+            value = program.id
         setattr(session, field, value)
 
     material_change = bool(updates.keys() & _APPROVAL_SENSITIVE_FIELDS)
@@ -105,17 +152,24 @@ def update_session(db: Session, session: TrainingSession, data: SessionUpdate) -
         session.approval_status = "PENDING"
         session.approval_note = None
 
+    log_action(db, user_id=user_id, action="UPDATE_SESSION",
+               entity_type="session", entity_id=session.id,
+               detail=", ".join(updates.keys()) if updates else None)
     db.commit()
     db.refresh(session)
     return to_session_out(db, session)
 
 
-def delete_session(db: Session, session: TrainingSession) -> None:
+def delete_session(
+    db: Session, session: TrainingSession, user_id: str | None = None
+) -> None:
     if session.certificates_issued:
         raise HTTPException(
             status_code=400,
             detail="Cannot delete a session after certificates have been issued.",
         )
+    log_action(db, user_id=user_id, action="DELETE_SESSION",
+               entity_type="session", entity_id=session.id, detail=session.title)
     db.delete(session)
     db.commit()
 
@@ -126,6 +180,8 @@ def approve_session(db: Session, session: TrainingSession, reviewed_by: str) -> 
     session.approval_status = "APPROVED"
     session.approved_by     = reviewed_by
     session.approval_note   = None
+    log_action(db, user_id=reviewed_by, action="APPROVE_SESSION",
+               entity_type="session", entity_id=session.id)
     db.commit()
     db.refresh(session)
     return to_session_out(db, session)
@@ -142,12 +198,17 @@ def reject_session(db: Session, session: TrainingSession, note: str, reviewed_by
     session.approval_status = "REJECTED"
     session.approval_note   = note
     session.approved_by     = reviewed_by
+    log_action(db, user_id=reviewed_by, action="REJECT_SESSION",
+               entity_type="session", entity_id=session.id, detail=note)
     db.commit()
     db.refresh(session)
     return to_session_out(db, session)
 
 
-def submit_report(db: Session, session: TrainingSession, report: TrainingReportSchema) -> SessionOut:
+def submit_report(
+    db: Session, session: TrainingSession, report: TrainingReportSchema,
+    submitted_by: str | None = None,
+) -> SessionOut:
     if session.approval_status != "APPROVED":
         raise HTTPException(
             status_code=400,
@@ -166,28 +227,36 @@ def submit_report(db: Session, session: TrainingSession, report: TrainingReportS
     session.report_approval_status = "PENDING"
     session.report_approval_note   = None
     session.status                 = "COMPLETED"
+    log_action(db, user_id=submitted_by, action="SUBMIT_REPORT",
+               entity_type="session", entity_id=session.id)
     db.commit()
     db.refresh(session)
     return to_session_out(db, session)
 
 
-def approve_report(db: Session, session: TrainingSession) -> SessionOut:
+def approve_report(db: Session, session: TrainingSession, reviewed_by: str) -> SessionOut:
     if not session.report_submitted_at:
         raise HTTPException(status_code=400, detail="No report has been submitted for this session.")
     if session.report_approval_status == "APPROVED":
         raise HTTPException(status_code=400, detail="Report is already approved.")
     session.report_approval_status = "APPROVED"
     session.report_approval_note   = None
+    session.report_approved_by     = reviewed_by
+    log_action(db, user_id=reviewed_by, action="APPROVE_REPORT",
+               entity_type="session", entity_id=session.id)
     db.commit()
     db.refresh(session)
     return to_session_out(db, session)
 
 
-def reject_report(db: Session, session: TrainingSession, note: str) -> SessionOut:
+def reject_report(db: Session, session: TrainingSession, note: str, reviewed_by: str) -> SessionOut:
     if session.report_approval_status == "REJECTED":
         raise HTTPException(status_code=400, detail="Report is already rejected.")
     session.report_approval_status = "REJECTED"
     session.report_approval_note   = note
+    session.report_approved_by     = reviewed_by
+    log_action(db, user_id=reviewed_by, action="REJECT_REPORT",
+               entity_type="session", entity_id=session.id, detail=note)
     db.commit()
     db.refresh(session)
     return to_session_out(db, session)
@@ -209,6 +278,7 @@ def add_participant(
     facility: str,
     status: str = "PRESENT",
     staff_number: str | None = None,
+    added_by: str | None = None,
 ) -> Participant:
     p = Participant(
         id=str(uuid.uuid4()),
@@ -222,12 +292,18 @@ def add_participant(
     db.add(p)
     db.flush()
     _sync_trainee_count(db, session)
+    log_action(db, user_id=added_by, action="ADD_PARTICIPANT",
+               entity_type="participant", entity_id=p.id,
+               detail=f"{name} ({cadre}) — session {session.id}")
     db.commit()
     db.refresh(p)
     return p
 
 
-def toggle_attendance(db: Session, session_id: str, participant_id: str) -> Participant:
+def toggle_attendance(
+    db: Session, session_id: str, participant_id: str,
+    toggled_by: str | None = None,
+) -> Participant:
     p = db.query(Participant).filter(
         Participant.id == participant_id,
         Participant.session_id == session_id
@@ -235,6 +311,9 @@ def toggle_attendance(db: Session, session_id: str, participant_id: str) -> Part
     if not p:
         raise HTTPException(status_code=404, detail="Participant not found.")
     p.status = "ABSENT" if p.status == "PRESENT" else "PRESENT"
+    log_action(db, user_id=toggled_by, action="TOGGLE_ATTENDANCE",
+               entity_type="participant", entity_id=participant_id,
+               detail=f"→ {p.status}")
     db.commit()
     db.refresh(p)
     return p
@@ -246,6 +325,7 @@ def update_scores(
     participant_id: str,
     pre: float | None,
     post: float | None,
+    updated_by: str | None = None,
 ) -> Participant:
     if pre is not None and not (0 <= pre <= 100):
         raise HTTPException(status_code=400, detail="pre_test_score must be between 0 and 100.")
@@ -261,18 +341,27 @@ def update_scores(
         p.pre_test_score = pre
     if post is not None:
         p.post_test_score = post
+    log_action(db, user_id=updated_by, action="UPDATE_SCORES",
+               entity_type="participant", entity_id=participant_id,
+               detail=f"pre={pre} post={post}")
     db.commit()
     db.refresh(p)
     return p
 
 
-def remove_participant(db: Session, session: TrainingSession, participant_id: str) -> None:
+def remove_participant(
+    db: Session, session: TrainingSession, participant_id: str,
+    removed_by: str | None = None,
+) -> None:
     p = db.query(Participant).filter(
         Participant.id == participant_id,
         Participant.session_id == session.id
     ).first()
     if not p:
         raise HTTPException(status_code=404, detail="Participant not found.")
+    log_action(db, user_id=removed_by, action="REMOVE_PARTICIPANT",
+               entity_type="participant", entity_id=participant_id,
+               detail=f"{p.name} — session {session.id}")
     db.delete(p)
     db.flush()
     _sync_trainee_count(db, session)
@@ -281,7 +370,10 @@ def remove_participant(db: Session, session: TrainingSession, participant_id: st
 
 # ── Trainers ───────────────────────────────────────────────────────────────────
 
-def add_trainer(db: Session, session: TrainingSession, name: str, cadre: str, phone: str) -> SessionTrainer:
+def add_trainer(
+    db: Session, session: TrainingSession, name: str, cadre: str, phone: str,
+    added_by: str | None = None,
+) -> SessionTrainer:
     t = SessionTrainer(
         id=str(uuid.uuid4()),
         session_id=session.id,
@@ -290,17 +382,27 @@ def add_trainer(db: Session, session: TrainingSession, name: str, cadre: str, ph
         phone=phone,
     )
     db.add(t)
+    db.flush()
+    log_action(db, user_id=added_by, action="ADD_TRAINER",
+               entity_type="trainer", entity_id=t.id,
+               detail=f"{name} ({cadre}) — session {session.id}")
     db.commit()
     db.refresh(t)
     return t
 
 
-def remove_trainer(db: Session, session_id: str, trainer_id: str) -> None:
+def remove_trainer(
+    db: Session, session_id: str, trainer_id: str,
+    removed_by: str | None = None,
+) -> None:
     t = db.query(SessionTrainer).filter(
         SessionTrainer.id == trainer_id,
         SessionTrainer.session_id == session_id
     ).first()
     if not t:
         raise HTTPException(status_code=404, detail="Trainer not found.")
+    log_action(db, user_id=removed_by, action="REMOVE_TRAINER",
+               entity_type="trainer", entity_id=trainer_id,
+               detail=f"{t.name} — session {session_id}")
     db.delete(t)
     db.commit()

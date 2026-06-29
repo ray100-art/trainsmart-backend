@@ -1,0 +1,24 @@
+[Unit]
+Description=TrainSMART API (FastAPI / Uvicorn)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=trainsmart
+Group=trainsmart
+WorkingDirectory=/opt/trainsmart/backend
+EnvironmentFile=/etc/trainsmart/backend.env
+ExecStart=/opt/trainsmart/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/trainsmart/backend
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

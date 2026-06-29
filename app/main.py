@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.database import get_db, engine
-from app.routers import auth, sessions, participants, trainers, certificates, stats
+from app.routers import auth, sessions, participants, trainers, certificates, stats, programs, audit
 
 # Tables are managed exclusively by Alembic migrations.
 # NEVER call Base.metadata.create_all() here — it conflicts with Alembic
@@ -46,6 +46,8 @@ app.include_router(participants.router,  prefix=PREFIX)
 app.include_router(trainers.router,      prefix=PREFIX)
 app.include_router(certificates.router,  prefix=PREFIX)
 app.include_router(stats.router,         prefix=PREFIX)
+app.include_router(programs.router,      prefix=PREFIX)
+app.include_router(audit.router,         prefix=PREFIX)
 
 
 @app.get("/")

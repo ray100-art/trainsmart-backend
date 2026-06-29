@@ -1,49 +1,74 @@
-# TranSMART — Bug Fix Files
+# TrainSMART Backend
 
-Replace each file at the path shown. No other files need to change.
+FastAPI + PostgreSQL API for NASCOP/MOH Kenya national training registry.
 
----
+## Development
 
-## .env
-**Path:** `transmart-backend/.env`
-**Fix:** SECRET_KEY was the placeholder string — the config validator rejects it and
-the server won't start. Replaced with a real 64-char hex key.
+```powershell
+cd C:\transmart-backend
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env
+# Edit .env — set DATABASE_URL to your PostgreSQL instance
+alembic upgrade head
+python seed.py
+python main.py
+```
 
-> If deploying to production, generate your own:
->   python -c "import secrets; print(secrets.token_hex(32))"
+API: http://localhost:8000  
+Docs: http://localhost:8000/docs (disabled when `ENVIRONMENT=production`)
 
----
+## PostgreSQL
 
-## certificate_service.py
-**Path:** `transmart-backend/app/services/certificate_service.py`
-**Fix:** Serial numbers collided across sessions. Two sessions in the same county
-both generated `MOH-TS-NAI-2026-001`, hitting the UNIQUE constraint on the second
-commit. Now includes the first 6 chars of the session UUID in the serial:
-  MOH-TS-{COUNTY}-{YEAR}-{SESSION_SHORT}-{NNN}
-Also added a guard that raises 400 if there are no eligible participants, and
-uses the actual session year instead of the hardcoded "2026".
+Development and production both use PostgreSQL. Example `DATABASE_URL`:
 
----
+```
+postgresql://postgres:password@localhost:5432/trainsmart
+```
 
-## session_service.py
-**Path:** `transmart-backend/app/services/session_service.py`
-**Fixes:**
-1. trainee_count was never updated — always stayed at 0. add_participant now
-   increments it and remove_participant decrements it (clamped to 0).
-2. add_participant now accepts and uses the `status` parameter instead of
-   ignoring it and hardcoding "PRESENT".
+Local Postgres via Docker:
 
----
+```powershell
+cd deploy
+$env:POSTGRES_PASSWORD="yourpassword"
+docker compose up -d
+```
 
-## participants.py
-**Path:** `transmart-backend/app/routers/participants.py`
-**Fix:** The add_participant route was not passing data.status to the service.
-Now passes it through so the caller's value is respected.
+Then set `DATABASE_URL=postgresql://trainsmart:yourpassword@localhost:5432/trainsmart`.
 
----
+## Production deployment
 
-## auth.py
-**Path:** `transmart-backend/app/routers/auth.py`
-**Fix:** POST /auth/register was completely open — any unauthenticated user could
-self-register with any role including ROLE_NATIONAL_ADMIN. Now requires
-ROLE_SYSTEM_ADMIN to create accounts.
+See `deploy/` for:
+
+| File | Purpose |
+|------|---------|
+| `env.production.example` | Production environment template |
+| `docker-compose.yml` | PostgreSQL 16 container |
+| `nginx-trainsmart.conf` | Nginx reverse proxy + SPA |
+| `trainsmart-api.service` | systemd unit (4 Uvicorn workers) |
+| `deploy.sh` | Migrate + seed on Linux |
+
+### Production checklist
+
+1. Provision PostgreSQL 16 (managed or `docker compose` in `deploy/`)
+2. Copy `deploy/env.production.example` → `/etc/trainsmart/backend.env`
+3. Set `ENVIRONMENT=production`, strong `SECRET_KEY`, real `DATABASE_URL`
+4. `alembic upgrade head` && `python seed.py`
+5. Build frontend with `VITE_API_URL=/api/v1` (same-origin) or full API URL
+6. Deploy `dist/` to `/var/www/trainsmart/frontend/dist`
+7. Enable nginx site + SSL (Let's Encrypt or MOH PKI)
+8. Enable `trainsmart-api.service`
+
+### Frontend pairing
+
+Canonical frontend: `C:\trainsmart-frontend`  
+Production build: `npm run build` with `.env.production` from `.env.production.example`
+
+## Tests
+
+```powershell
+pytest tests/ -q
+```
+
+Uses SQLite test DB only in tests — production requires PostgreSQL.

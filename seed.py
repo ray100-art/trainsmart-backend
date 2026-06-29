@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.database import engine
 from app.models.user import User
 from app.core.security import hash_password
+from app.services.program_service import seed_default_programs
 
 ADMIN_USERNAME = "admin"
 ADMIN_EMAIL    = "admin@moh.go.ke"
@@ -49,3 +50,9 @@ with Session(engine) as db:
         print(f"  Password : {admin_password}")
         print(f"  Role     : ROLE_SYSTEM_ADMIN")
         print("\nSave this password securely and change it after first login.")
+
+    seeded = seed_default_programs(db)
+    if seeded:
+        print(f"\nSeeded {seeded} national training program(s) into the catalog.")
+    else:
+        print("\nTraining program catalog already populated.")

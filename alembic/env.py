@@ -1,5 +1,5 @@
 from logging.config import fileConfig
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 from alembic import context
 
 from app.core.config import settings
@@ -15,6 +15,16 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+
+
+def _ensure_alembic_version_column_width(connection) -> None:
+    """Alembic revision IDs can exceed VARCHAR(32) on older PostgreSQL setups."""
+    if connection.dialect.name != "postgresql":
+        return
+    connection.execute(text(
+        "ALTER TABLE alembic_version "
+        "ALTER COLUMN version_num TYPE VARCHAR(64)"
+    ))
 
 
 def run_migrations_offline() -> None:
@@ -36,6 +46,8 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
+        _ensure_alembic_version_column_width(connection)
+        connection.commit()
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()

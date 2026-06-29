@@ -1,9 +1,12 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas.participant import ParticipantCreate, ParticipantOut, ScoresUpdate
+from app.schemas.participant import ParticipantCreate, ParticipantOut
+from app.schemas.participant import ScoresUpdate
 from app.services import session_service
+from app.services.participant_import_service import bulk_import_participants_csv, participant_csv_template
 from app.core.dependencies import (
     require_trainer, require_any_staff,
     assert_owns_session, assert_session_approved, assert_training_mutable,
@@ -25,6 +28,45 @@ def list_participants(
     return s.participants
 
 
+@router.get("/import/template.csv")
+def participant_import_template(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_trainer),
+):
+    s = session_service.get_session_or_404(db, session_id)
+    assert_owns_session(s, current_user)
+    return PlainTextResponse(
+        content=participant_csv_template(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="participants-template.csv"'},
+    )
+
+
+@router.post("/import")
+def import_participants_csv(
+    session_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_trainer),
+):
+    s = session_service.get_session_or_404(db, session_id)
+    assert_owns_session(s, current_user)
+    assert_session_approved(s)
+    assert_training_mutable(s)
+
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Upload a .csv file.")
+
+    raw = file.file.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+
+    return bulk_import_participants_csv(db, s, text, added_by=current_user.id)
+
+
 @router.post("", response_model=ParticipantOut, status_code=201)
 def add_participant(
     session_id: str,
@@ -37,7 +79,8 @@ def add_participant(
     assert_session_approved(s)
     assert_training_mutable(s)
     return session_service.add_participant(
-        db, s, data.name, data.cadre, data.facility, data.status, data.staff_number
+        db, s, data.name, data.cadre, data.facility, data.status, data.staff_number,
+        added_by=current_user.id,
     )
 
 
@@ -52,7 +95,7 @@ def toggle_attendance(
     assert_owns_session(s, current_user)
     assert_session_approved(s)
     assert_training_mutable(s)
-    return session_service.toggle_attendance(db, session_id, participant_id)
+    return session_service.toggle_attendance(db, session_id, participant_id, toggled_by=current_user.id)
 
 
 @router.patch("/{participant_id}/scores", response_model=ParticipantOut)
@@ -68,7 +111,8 @@ def update_scores(
     assert_session_approved(s)
     assert_training_mutable(s)
     return session_service.update_scores(
-        db, session_id, participant_id, data.pre_test_score, data.post_test_score
+        db, session_id, participant_id, data.pre_test_score, data.post_test_score,
+        updated_by=current_user.id,
     )
 
 
@@ -83,4 +127,4 @@ def remove_participant(
     assert_owns_session(s, current_user)
     assert_session_approved(s)
     assert_training_mutable(s)
-    session_service.remove_participant(db, s, participant_id)
+    session_service.remove_participant(db, s, participant_id, removed_by=current_user.id)

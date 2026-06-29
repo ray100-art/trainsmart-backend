@@ -14,6 +14,7 @@ class TrainingReportSchema(BaseModel):
 
 class SessionCreate(BaseModel):
     title: str = Field(..., min_length=3, max_length=300)
+    program_id: Optional[str] = Field(None, min_length=1, max_length=100)
     county: str = Field(..., min_length=2, max_length=100)
     facility: str = Field(..., min_length=2, max_length=300)
     start_date: date
@@ -29,6 +30,7 @@ class SessionCreate(BaseModel):
 
 class SessionUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=3, max_length=300)
+    program_id: Optional[str] = Field(None, min_length=1, max_length=100)
     county: Optional[str] = Field(None, min_length=2, max_length=100)
     facility: Optional[str] = Field(None, min_length=2, max_length=300)
     start_date: Optional[date] = None
@@ -47,6 +49,9 @@ class RejectReportRequest(BaseModel):
 class SessionOut(BaseModel):
     id: str
     title: str
+    program_id: Optional[str] = None
+    program_code: Optional[str] = None
+    program_name: Optional[str] = None
     county: str
     facility: str
     trainee_count: int
@@ -63,6 +68,8 @@ class SessionOut(BaseModel):
     report_submitted_at: Optional[date] = None
     report_approval_status: str
     report_approval_note: Optional[str] = None
+    report_approved_by: Optional[str] = None
+    report_approved_by_name: Optional[str] = None
     certificates_issued: bool
     participants: list[ParticipantOut] = []
     trainers: list[TrainerOut] = []

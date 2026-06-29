@@ -125,6 +125,11 @@ def assert_training_mutable(session) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot modify training data after certificates have been issued.",
         )
+    if session.report_submitted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot modify training data after the report has been submitted.",
+        )
 
 
 require_trainer        = require_roles("ROLE_TRAINER", "ROLE_SYSTEM_ADMIN")

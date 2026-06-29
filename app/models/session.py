@@ -28,9 +28,13 @@ class TrainingSession(Base):
     report_submitted_at   = Column(Date, nullable=True)
     report_approval_status= Column(String, default="PENDING")         # PENDING | APPROVED | REJECTED
     report_approval_note  = Column(Text, nullable=True)
+    report_approved_by    = Column(String, nullable=True)             # user ID of report reviewer
 
     # Certificates
     certificates_issued   = Column(Boolean, default=False)
+
+    # Standardized NASCOP training program
+    program_id            = Column(String, ForeignKey("training_programs.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Audit
     created_by            = Column(String, ForeignKey("users.id"), nullable=True)
@@ -44,3 +48,4 @@ class TrainingSession(Base):
                                          cascade="all, delete-orphan")
     trainers              = relationship("SessionTrainer", back_populates="session",
                                          cascade="all, delete-orphan")
+    program               = relationship("TrainingProgram", back_populates="sessions")

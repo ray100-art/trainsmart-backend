@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     VERIFY_RATE_LIMIT_MAX: int = 30
     VERIFY_RATE_LIMIT_WINDOW_SECONDS: int = 60
 
+    # ── Rate limit storage ────────────────────────────────────────────────────
+    # "memory"   — in-process dict; fast, works for single-worker deployments
+    # "database" — PostgreSQL-backed; survives restarts, works across workers
+    RATE_LIMIT_STORAGE: str = "memory"
+
     @field_validator("SECRET_KEY")
     @classmethod
     def secret_key_must_be_strong(cls, v: str) -> str:

@@ -21,7 +21,7 @@ def add_trainer(
     assert_owns_session(s, current_user)
     assert_session_approved(s)
     assert_training_mutable(s)
-    return session_service.add_trainer(db, s, data.name, data.cadre, data.phone)
+    return session_service.add_trainer(db, s, data.name, data.cadre, data.phone, added_by=current_user.id)
 
 
 @router.delete("/{trainer_id}", status_code=204)
@@ -35,4 +35,4 @@ def remove_trainer(
     assert_owns_session(s, current_user)
     assert_session_approved(s)
     assert_training_mutable(s)
-    session_service.remove_trainer(db, session_id, trainer_id)
+    session_service.remove_trainer(db, session_id, trainer_id, removed_by=current_user.id)

@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.main import app
 from app.database import Base, get_db
-from app.models import User, AuditLog  # noqa: F401 — ensure all tables are registered
+from app.models import User, AuditLog, LegacyCertificate, TrainingProgram  # noqa: F401 — ensure all tables are registered
 from app.core.security import hash_password
 import uuid
 
