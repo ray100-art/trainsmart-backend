@@ -17,8 +17,8 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def _ensure_alembic_version_column_width(connection) -> None:
-    """Alembic revision IDs can exceed VARCHAR(32) on older PostgreSQL setups."""
+def _ensure_alembic_version_table(connection) -> None:
+    """Revision IDs like 004_report_approver_and_ratelimit exceed Alembic's default VARCHAR(32)."""
     if connection.dialect.name != "postgresql":
         return
     exists = connection.execute(text(
@@ -27,12 +27,18 @@ def _ensure_alembic_version_column_width(connection) -> None:
         "  WHERE table_schema = 'public' AND table_name = 'alembic_version'"
         ")"
     )).scalar()
-    if not exists:
-        return
-    connection.execute(text(
-        "ALTER TABLE alembic_version "
-        "ALTER COLUMN version_num TYPE VARCHAR(64)"
-    ))
+    if exists:
+        connection.execute(text(
+            "ALTER TABLE alembic_version "
+            "ALTER COLUMN version_num TYPE VARCHAR(64)"
+        ))
+    else:
+        connection.execute(text(
+            "CREATE TABLE alembic_version ("
+            "  version_num VARCHAR(64) NOT NULL, "
+            "  CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)"
+            ")"
+        ))
 
 
 def run_migrations_offline() -> None:
@@ -54,7 +60,7 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        _ensure_alembic_version_column_width(connection)
+        _ensure_alembic_version_table(connection)
         connection.commit()
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
