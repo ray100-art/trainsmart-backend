@@ -21,6 +21,14 @@ def _ensure_alembic_version_column_width(connection) -> None:
     """Alembic revision IDs can exceed VARCHAR(32) on older PostgreSQL setups."""
     if connection.dialect.name != "postgresql":
         return
+    exists = connection.execute(text(
+        "SELECT EXISTS ("
+        "  SELECT 1 FROM information_schema.tables "
+        "  WHERE table_schema = 'public' AND table_name = 'alembic_version'"
+        ")"
+    )).scalar()
+    if not exists:
+        return
     connection.execute(text(
         "ALTER TABLE alembic_version "
         "ALTER COLUMN version_num TYPE VARCHAR(64)"
