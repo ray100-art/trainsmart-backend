@@ -5,8 +5,9 @@ from app.models.trainer import SessionTrainer
 from app.models.audit_log import AuditLog
 from app.models.legacy_certificate import LegacyCertificate
 from app.models.training_program import TrainingProgram
+from app.models.rate_limit import RateLimitEvent
 
 __all__ = [
     "User", "TrainingSession", "Participant", "SessionTrainer",
-    "AuditLog", "LegacyCertificate", "TrainingProgram",
+    "AuditLog", "LegacyCertificate", "TrainingProgram", "RateLimitEvent",
 ]

@@ -76,3 +76,30 @@ class SessionOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class SessionSummary(BaseModel):
+    """List DTO — no nested participants/trainers (load those via GET /sessions/{id})."""
+    id: str
+    title: str
+    program_id: Optional[str] = None
+    program_code: Optional[str] = None
+    program_name: Optional[str] = None
+    county: str
+    facility: str
+    trainee_count: int
+    start_date: date
+    end_date: date
+    status: str
+    approval_status: str
+    approval_note: Optional[str] = None
+    approved_by: Optional[str] = None
+    approved_by_name: Optional[str] = None
+    report_submitted_at: Optional[date] = None
+    report_approval_status: str
+    report_approved_by: Optional[str] = None
+    report_approved_by_name: Optional[str] = None
+    certificates_issued: bool
+
+    class Config:
+        from_attributes = True

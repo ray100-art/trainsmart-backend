@@ -19,7 +19,9 @@ def test_create_and_list_sessions(client):
 
     res = client.get("/api/v1/sessions", headers=headers)
     assert res.status_code == 200
-    assert session_id in [s["id"] for s in res.json()]
+    payload = res.json()
+    assert "items" in payload and "total" in payload
+    assert session_id in [s["id"] for s in payload["items"]]
 
 
 def test_update_session_title_does_not_reset_approval(client):

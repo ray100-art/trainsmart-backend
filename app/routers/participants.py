@@ -7,6 +7,7 @@ from app.schemas.participant import ParticipantCreate, ParticipantOut
 from app.schemas.participant import ScoresUpdate
 from app.services import session_service
 from app.services.participant_import_service import bulk_import_participants_csv, participant_csv_template
+from app.lib.uploads import read_upload_text
 from app.core.dependencies import (
     require_trainer, require_any_staff,
     assert_owns_session, assert_session_approved, assert_training_mutable,
@@ -58,12 +59,7 @@ def import_participants_csv(
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Upload a .csv file.")
 
-    raw = file.file.read()
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1")
-
+    text = read_upload_text(file)
     return bulk_import_participants_csv(db, s, text, added_by=current_user.id)
 
 

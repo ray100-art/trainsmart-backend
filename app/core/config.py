@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     # "database" — PostgreSQL-backed; survives restarts, works across workers
     RATE_LIMIT_STORAGE: str = "memory"
 
+    # Trust X-Forwarded-For / X-Real-IP only behind a reverse proxy (nginx).
+    TRUST_PROXY_HEADERS: bool = False
+
+    # Comma-separated hostnames; empty = disabled. Example: nhcsc.nascop.org,api.example.com
+    TRUSTED_HOSTS: str = ""
+
+    # Hard cap for M&E CSV exports (rows). Prevents OOM on national dumps.
+    EXPORT_MAX_ROWS: int = 10000
+
     @field_validator("SECRET_KEY")
     @classmethod
     def secret_key_must_be_strong(cls, v: str) -> str:
@@ -93,8 +102,19 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
 
     @property
+    def trusted_hosts_list(self) -> list[str]:
+        return [h.strip() for h in self.TRUSTED_HOSTS.split(",") if h.strip()]
+
+    @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"
+
+    @property
+    def rate_limit_use_database(self) -> bool:
+        # Multi-worker production always needs shared storage
+        if self.is_production:
+            return True
+        return self.RATE_LIMIT_STORAGE == "database"
 
     @property
     def docs_enabled(self) -> bool:

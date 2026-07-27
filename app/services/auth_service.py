@@ -2,8 +2,7 @@ import uuid
 import secrets
 import logging
 from datetime import datetime, timedelta, timezone
-from collections import defaultdict
-from threading import Lock
+from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy.orm import Session
 from fastapi import BackgroundTasks, HTTPException, status, Response
@@ -12,11 +11,17 @@ from app.models.user import User
 from app.schemas.auth import UserCreate
 from app.core.security import hash_password, verify_password, create_access_token
 from app.core.config import settings
+from app.core.rate_limit import (
+    check_account_lockout, record_failed_login, clear_failed_logins,
+)
 from app.lib.county import normalize_county
 from app.services.email_service import send_welcome_email
 from app.services.audit_service import log_action
 
 logger = logging.getLogger(__name__)
+
+# Offload SMTP so Uvicorn workers are not blocked after the response is sent
+_email_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="email")
 
 VALID_ROLES = {
     "ROLE_TRAINER",
@@ -27,43 +32,9 @@ VALID_ROLES = {
     "ROLE_TRAINEE",
 }
 
-_login_attempts: dict = defaultdict(lambda: {"count": 0, "locked_until": None})
-_lock = Lock()
-
 _DUMMY_HASH = "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TsuQSm0l8AKKqFvpNP1M0SnbLpqu"
 
 SETUP_TOKEN_HOURS = 48
-
-
-def _check_rate_limit(identifier: str) -> None:
-    with _lock:
-        if identifier not in _login_attempts:
-            return
-        record = _login_attempts[identifier]
-        now = datetime.now(timezone.utc)
-        if record["locked_until"] and now < record["locked_until"]:
-            remaining = int((record["locked_until"] - now).total_seconds() / 60) + 1
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Account temporarily locked. Try again in {remaining} minute(s).",
-            )
-        if record["locked_until"] and now >= record["locked_until"]:
-            _login_attempts.pop(identifier, None)
-
-
-def _record_failed_attempt(identifier: str) -> None:
-    with _lock:
-        record = _login_attempts[identifier]
-        record["count"] += 1
-        if record["count"] >= settings.LOGIN_MAX_ATTEMPTS:
-            record["locked_until"] = (
-                datetime.now(timezone.utc) + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
-            )
-
-
-def _clear_attempts(identifier: str) -> None:
-    with _lock:
-        _login_attempts.pop(identifier, None)
 
 
 def validate_password_strength(password: str) -> None:
@@ -113,7 +84,12 @@ def _set_auth_cookie(response: Response, token: str) -> None:
 
 
 def clear_auth_cookie(response: Response) -> None:
-    response.delete_cookie(key=settings.COOKIE_NAME, path="/")
+    response.delete_cookie(
+        key=settings.COOKIE_NAME,
+        path="/",
+        secure=settings.cookie_secure,
+        samesite=settings.cookie_samesite_effective,
+    )
 
 
 def _build_token(user: User) -> str:
@@ -123,6 +99,17 @@ def _build_token(user: User) -> str:
         "county": user.county,
         "tv": user.token_version,
     })
+
+
+def _auth_response_body(user: User) -> dict:
+    """Browser clients use the httpOnly cookie; JWT is not returned in the body."""
+    return {
+        "role":         user.role,
+        "county":       user.county,
+        "username":     user.username,
+        "full_name":    user.full_name,
+        "staff_number": user.staff_number,
+    }
 
 
 def create_user(
@@ -178,8 +165,8 @@ def create_user(
                 county=user.county,
             )
 
-        if background_tasks:
-            background_tasks.add_task(_send)
+        if background_tasks is not None:
+            _email_executor.submit(_send)
         else:
             try:
                 _send()
@@ -191,7 +178,7 @@ def create_user(
 
 def authenticate_user(db: Session, identifier: str, password: str) -> User:
     identifier = identifier.strip().lower()
-    _check_rate_limit(identifier)
+    check_account_lockout(db, identifier)
 
     user = db.query(User).filter(
         (User.username == identifier) | (User.email == identifier)
@@ -200,13 +187,13 @@ def authenticate_user(db: Session, identifier: str, password: str) -> User:
     password_ok = verify_password(password, user.hashed_password if user else _DUMMY_HASH)
 
     if not user or not password_ok or not user.is_active:
-        _record_failed_attempt(identifier)
+        record_failed_login(db, identifier)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials. Please check your username and password.",
         )
 
-    _clear_attempts(identifier)
+    clear_failed_logins(db, identifier)
     return user
 
 
@@ -217,14 +204,7 @@ def login_user(db: Session, username: str, password: str, response: Response) ->
     log_action(db, user_id=user.id, action="LOGIN",
                entity_type="user", entity_id=user.id)
     db.commit()
-    return {
-        "token":        token,
-        "role":         user.role,
-        "county":       user.county,
-        "username":     user.username,
-        "full_name":    user.full_name,
-        "staff_number": user.staff_number,
-    }
+    return _auth_response_body(user)
 
 
 def complete_setup(db: Session, token: str, new_password: str, response: Response) -> dict:
@@ -250,14 +230,7 @@ def complete_setup(db: Session, token: str, new_password: str, response: Respons
 
     jwt_token = _build_token(user)
     _set_auth_cookie(response, jwt_token)
-    return {
-        "token":        jwt_token,
-        "role":         user.role,
-        "county":       user.county,
-        "username":     user.username,
-        "full_name":    user.full_name,
-        "staff_number": user.staff_number,
-    }
+    return _auth_response_body(user)
 
 
 def change_user_password(db: Session, user: User, new_password: str) -> None:
@@ -307,5 +280,8 @@ def activate_user(db: Session, user_id: str, requesting_user_id: str | None = No
     return user
 
 
-def list_users(db: Session, skip: int = 0, limit: int = 100) -> list[User]:
-    return db.query(User).order_by(User.created_at.desc()).offset(skip).limit(limit).all()
+def list_users(db: Session, skip: int = 0, limit: int = 100) -> tuple[list[User], int]:
+    q = db.query(User)
+    total = q.count()
+    items = q.order_by(User.created_at.desc()).offset(skip).limit(limit).all()
+    return items, total

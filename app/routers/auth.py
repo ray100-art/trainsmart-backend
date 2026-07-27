@@ -4,9 +4,10 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas.auth import LoginRequest, LoginResponse, UserCreate, UserOut
+from app.schemas.common import PaginatedResponse
 from app.services.auth_service import (
     login_user, create_user, deactivate_user, activate_user,
-    list_users, validate_password_strength, complete_setup,
+    list_users, complete_setup,
     change_user_password, clear_auth_cookie,
 )
 from app.core.dependencies import get_current_user, require_system_admin
@@ -30,8 +31,9 @@ class SetupPasswordRequest(BaseModel):
 @router.post("/login", response_model=LoginResponse)
 def login(data: LoginRequest, response: Response, request: Request, db: Session = Depends(get_db)):
     from app.core.config import settings
+    # IP throttle for production/multi-worker; always pass db so RATE_LIMIT_STORAGE=database works
     if settings.is_production:
-        check_login_ip_rate_limit(request)
+        check_login_ip_rate_limit(request, db=db)
     return login_user(db, data.username, data.password, response)
 
 
@@ -78,14 +80,15 @@ def change_password(
     return {"message": "Password updated successfully. Please log in again."}
 
 
-@router.get("/users", response_model=list[UserOut])
+@router.get("/users", response_model=PaginatedResponse[UserOut])
 def get_all_users(
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     _: User = Depends(require_system_admin),
 ):
-    return list_users(db, skip, limit)
+    items, total = list_users(db, skip, limit)
+    return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 
 @router.patch("/users/{user_id}/deactivate", response_model=UserOut)

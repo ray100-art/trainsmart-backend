@@ -9,21 +9,29 @@ from app.models.participant import Participant
 from app.models.trainer import SessionTrainer
 from app.models.user import User
 from app.lib.county import normalize_county
-from app.schemas.session import SessionCreate, SessionUpdate, TrainingReportSchema, SessionOut
+from app.schemas.session import SessionCreate, SessionUpdate, TrainingReportSchema, SessionOut, SessionSummary
 from app.models.training_program import TrainingProgram
 from app.services.program_service import get_program_or_404
 from app.services.audit_service import log_action
 
 _APPROVAL_SENSITIVE_FIELDS = {"county", "facility", "start_date", "end_date"}
-_SESSION_LOAD_OPTIONS = (
+_SESSION_DETAIL_OPTIONS = (
     selectinload(TrainingSession.participants),
     selectinload(TrainingSession.trainers),
     selectinload(TrainingSession.program),
 )
 
+_SESSION_LIST_OPTIONS = (
+    selectinload(TrainingSession.program),
+)
+
 
 def _session_query(db: Session):
-    return db.query(TrainingSession).options(*_SESSION_LOAD_OPTIONS)
+    return db.query(TrainingSession).options(*_SESSION_DETAIL_OPTIONS)
+
+
+def _session_list_query(db: Session):
+    return db.query(TrainingSession).options(*_SESSION_LIST_OPTIONS)
 
 
 def to_session_out(db: Session, session: TrainingSession, reviewer_map: dict[str, str] | None = None) -> SessionOut:
@@ -56,21 +64,50 @@ def to_session_out(db: Session, session: TrainingSession, reviewer_map: dict[str
     return out
 
 
+def to_session_summary(
+    db: Session, session: TrainingSession, reviewer_map: dict[str, str] | None = None
+) -> SessionSummary:
+    out = SessionSummary.model_validate(session)
+
+    if session.approved_by:
+        name = (reviewer_map or {}).get(session.approved_by) if reviewer_map is not None else None
+        if name is None:
+            name = db.query(User.full_name).filter(User.id == session.approved_by).scalar()
+        if name:
+            out = out.model_copy(update={"approved_by_name": name})
+
+    if session.report_approved_by:
+        rname = (reviewer_map or {}).get(session.report_approved_by) if reviewer_map is not None else None
+        if rname is None:
+            rname = db.query(User.full_name).filter(User.id == session.report_approved_by).scalar()
+        if rname:
+            out = out.model_copy(update={"report_approved_by_name": rname})
+
+    if session.program:
+        out = out.model_copy(update={
+            "program_code": session.program.code,
+            "program_name": session.program.name,
+        })
+
+    return out
+
+
 def get_all_sessions(
     db: Session,
     county: str | None = None,
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 50,
     created_by: str | None = None,
-) -> list[SessionOut]:
-    q = _session_query(db)
+) -> tuple[list[SessionSummary], int]:
+    q = _session_list_query(db)
     if county:
         q = q.filter(TrainingSession.county == county)
     if created_by:
         q = q.filter(TrainingSession.created_by == created_by)
+
+    total = q.count()
     sessions = q.order_by(TrainingSession.created_at.desc()).offset(skip).limit(limit).all()
 
-    # Batch-load all reviewer names in one query instead of one query per session
     reviewer_ids = {s.approved_by for s in sessions if s.approved_by} | \
                    {s.report_approved_by for s in sessions if s.report_approved_by}
     reviewer_map: dict[str, str] = {}
@@ -78,7 +115,7 @@ def get_all_sessions(
         rows = db.query(User.id, User.full_name).filter(User.id.in_(reviewer_ids)).all()
         reviewer_map = {r.id: r.full_name for r in rows}
 
-    return [to_session_out(db, s, reviewer_map) for s in sessions]
+    return [to_session_summary(db, s, reviewer_map) for s in sessions], total
 
 
 def get_session_or_404(db: Session, session_id: str) -> TrainingSession:

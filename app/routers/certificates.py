@@ -9,6 +9,7 @@ from app.services.legacy_certificate_service import import_legacy_csv, legacy_cs
 from app.schemas.session import SessionOut
 from app.core.dependencies import require_national_admin, require_system_admin
 from app.core.rate_limit import check_verify_rate_limit
+from app.lib.uploads import read_upload_text
 from app.models.user import User
 
 router = APIRouter(prefix="/certificates", tags=["Certificates"])
@@ -54,10 +55,5 @@ def import_legacy_certificates(
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Upload a .csv file.")
 
-    raw = file.file.read()
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1")
-
+    text = read_upload_text(file)
     return import_legacy_csv(db, text, skip_duplicates=skip_duplicates)

@@ -11,7 +11,7 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    token: str
+    """Auth is cookie-based; JWT is not returned in the response body."""
     role: str
     county: str
     username: str

@@ -127,12 +127,15 @@ def get_analytics(db: Session, county: str | None = None) -> dict:
 
 
 def export_sessions_csv(db: Session, county: str | None = None) -> str:
-    """Export session summary as CSV for M&E reporting."""
+    """Export session summary as CSV for M&E reporting (capped to EXPORT_MAX_ROWS)."""
+    from app.core.config import settings
+
     filters = _session_filters(county)
     sessions = (
         db.query(TrainingSession)
         .filter(*filters)
         .order_by(TrainingSession.start_date.desc())
+        .limit(settings.EXPORT_MAX_ROWS)
         .all()
     )
 
@@ -169,13 +172,16 @@ def export_sessions_csv(db: Session, county: str | None = None) -> str:
 
 
 def export_participants_csv(db: Session, county: str | None = None) -> str:
-    """Export participant-level data for national M&E reporting."""
+    """Export participant-level data for national M&E reporting (capped to EXPORT_MAX_ROWS)."""
+    from app.core.config import settings
+
     filters = _session_filters(county)
     rows = (
         db.query(Participant, TrainingSession)
         .join(TrainingSession, Participant.session_id == TrainingSession.id)
         .filter(*filters)
         .order_by(TrainingSession.start_date.desc(), Participant.name)
+        .limit(settings.EXPORT_MAX_ROWS)
         .all()
     )
 

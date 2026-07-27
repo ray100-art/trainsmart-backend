@@ -62,7 +62,7 @@ postgresql://user:password@ep-xxxx.eu-west-2.aws.neon.tech/neondb?sslmode=requir
 
 5. Deploy → note your API URL, e.g. `https://trainsmart-api.onrender.com`
 
-6. **First deploy only:** open Render **Logs** — if admin was created, copy the generated password from logs.
+6. **First deploy only:** `seed.py` writes admin credentials to `.admin_credentials` (not to logs). On Render, set `ADMIN_CREDENTIALS_FILE` to a writable path or download/open that file from the instance once, then delete it. Change the password after first login.
 
 7. Test: `https://trainsmart-api.onrender.com/health` → `{"status":"healthy"}`
 
@@ -97,7 +97,7 @@ postgresql://user:password@ep-xxxx.eu-west-2.aws.neon.tech/neondb?sslmode=requir
 
 - URL: your Vercel link
 - Username: `admin`
-- Password: from Render logs (first `seed.py` run) or reset via local seed
+- Password: from `.admin_credentials` on first `seed.py` run (never printed to logs) or reset via a new seed on a fresh DB
 
 ---
 

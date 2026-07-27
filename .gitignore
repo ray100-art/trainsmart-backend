@@ -15,10 +15,8 @@ venv/
 env/
 ENV/
 
-# ── Environment / secrets (NEVER commit these) ────────────────────────────────
-.env
-.env.*
-!.env.example
+.admin_credentials
+.admin_credentials.*
 
 # ── Databases ─────────────────────────────────────────────────────────────────
 *.db

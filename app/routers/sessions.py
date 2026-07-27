@@ -4,10 +4,11 @@ from typing import Optional
 
 from app.database import get_db
 from app.schemas.session import (
-    SessionCreate, SessionUpdate, SessionOut,
+    SessionCreate, SessionUpdate, SessionOut, SessionSummary,
     RejectSessionRequest,
     TrainingReportSchema, RejectReportRequest,
 )
+from app.schemas.common import PaginatedResponse
 from app.services import session_service
 from app.core.dependencies import (
     get_current_user, require_trainer,
@@ -20,17 +21,20 @@ from app.models.user import User
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
 
 
-@router.get("", response_model=list[SessionOut])
+@router.get("", response_model=PaginatedResponse[SessionSummary])
 def list_sessions(
     county: Optional[str] = Query(None),
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_staff),
 ):
     effective_county = resolve_list_county(current_user, county)
     created_by = current_user.id if current_user.role == "ROLE_TRAINER" else None
-    return session_service.get_all_sessions(db, effective_county, skip, limit, created_by=created_by)
+    items, total = session_service.get_all_sessions(
+        db, effective_county, skip, limit, created_by=created_by
+    )
+    return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 
 @router.get("/{session_id}", response_model=SessionOut)

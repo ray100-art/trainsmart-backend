@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, Date, Text, ForeignKey, func
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, Date, Text, ForeignKey, Index, func
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -6,6 +6,13 @@ from app.database import Base
 
 class TrainingSession(Base):
     __tablename__ = "training_sessions"
+    __table_args__ = (
+        Index("ix_training_sessions_created_by", "created_by"),
+        Index("ix_training_sessions_created_at", "created_at"),
+        Index("ix_training_sessions_approval_status", "approval_status"),
+        Index("ix_training_sessions_county_created", "county", "created_at"),
+        Index("ix_training_sessions_created_by_created", "created_by", "created_at"),
+    )
 
     id                    = Column(String, primary_key=True, index=True)
     title                 = Column(String, nullable=False)

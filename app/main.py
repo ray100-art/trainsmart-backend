@@ -1,7 +1,9 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -9,6 +11,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.database import get_db, engine
 from app.routers import auth, sessions, participants, trainers, certificates, stats, programs, audit
+
+logger = logging.getLogger("trainsmart")
 
 # Tables are managed exclusively by Alembic migrations.
 # NEVER call Base.metadata.create_all() here — it conflicts with Alembic
@@ -18,6 +22,10 @@ from app.routers import auth, sessions, participants, trainers, certificates, st
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
     yield
     engine.dispose()
 
@@ -30,6 +38,9 @@ app = FastAPI(
     redoc_url="/redoc" if settings.docs_enabled else None,
     lifespan=lifespan,
 )
+
+if settings.trusted_hosts_list:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts_list)
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,5 +76,9 @@ def health(db: Session = Depends(get_db)):
     try:
         db.execute(text("SELECT 1"))
         return {"status": "healthy"}
-    except Exception:
-        return JSONResponse(status_code=503, content={"status": "unhealthy", "detail": "Database unreachable"})
+    except Exception as exc:
+        logger.exception("Health check failed: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "detail": "Database unreachable"},
+        )

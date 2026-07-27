@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.main import app
 from app.database import Base, get_db
-from app.models import User, AuditLog, LegacyCertificate, TrainingProgram  # noqa: F401 — ensure all tables are registered
+from app.models import User, AuditLog, LegacyCertificate, TrainingProgram, RateLimitEvent  # noqa: F401 — ensure all tables are registered
 from app.core.security import hash_password
 import uuid
 
@@ -72,9 +72,14 @@ def setup_db():
 
 
 def get_token(client: TestClient, username: str, password: str) -> str:
+    """Log in and return the JWT from the httpOnly cookie (not the JSON body)."""
+    from app.core.config import settings
     res = client.post("/api/v1/auth/login", json={"username": username, "password": password})
     assert res.status_code == 200, f"Login failed for {username}: {res.json()}"
-    return res.json()["token"]
+    assert "token" not in res.json(), "JWT must not be returned in the login body"
+    token = res.cookies.get(settings.COOKIE_NAME)
+    assert token, "Auth cookie was not set on login"
+    return token
 
 
 def auth_headers(client: TestClient, username: str, password: str) -> dict:

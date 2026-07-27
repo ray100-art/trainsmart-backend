@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: trainsmart
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - trainsmart_pgdata:/var/lib/postgresql/data
     healthcheck:
