@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.database import get_db, engine
-from app.routers import auth, sessions, participants, trainers, certificates, stats, programs, audit
+from app.routers import (
+    auth, sessions, participants, trainers, certificates, stats, programs, audit,
+    people, catalogs,
+)
 
 logger = logging.getLogger("trainsmart")
 
@@ -59,6 +62,20 @@ app.include_router(certificates.router,  prefix=PREFIX)
 app.include_router(stats.router,         prefix=PREFIX)
 app.include_router(programs.router,      prefix=PREFIX)
 app.include_router(audit.router,         prefix=PREFIX)
+app.include_router(people.router,        prefix=PREFIX)
+app.include_router(catalogs.facilities_router, prefix=PREFIX)
+app.include_router(catalogs.sponsors_router,   prefix=PREFIX)
+
+
+@app.get("/api/v1/moodle")
+def moodle_info():
+    """Legacy Moodle menu — returns configured LMS URL if set."""
+    return {
+        "enabled": bool(settings.MOODLE_URL),
+        "url": settings.MOODLE_URL or None,
+        "categories_path": "/course/index.php" if settings.MOODLE_URL else None,
+        "courses_path": "/course/search.php" if settings.MOODLE_URL else None,
+    }
 
 
 @app.get("/")

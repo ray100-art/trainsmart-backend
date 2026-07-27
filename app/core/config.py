@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # Hard cap for M&E CSV exports (rows). Prevents OOM on national dumps.
     EXPORT_MAX_ROWS: int = 10000
 
+    # Optional Moodle LMS base URL (legacy Moodle menu)
+    MOODLE_URL: str = ""
+
     @field_validator("SECRET_KEY")
     @classmethod
     def secret_key_must_be_strong(cls, v: str) -> str:

@@ -18,37 +18,35 @@ class TrainingSession(Base):
     title                 = Column(String, nullable=False)
     county                = Column(String, nullable=False, index=True)
     facility              = Column(String, nullable=False)
+    venue                 = Column(String, nullable=True)
+    funding_source        = Column(String, nullable=True)
+    sponsor_id            = Column(String, ForeignKey("sponsors.id", ondelete="SET NULL"), nullable=True, index=True)
     trainee_count         = Column(Integer, default=0)
     start_date            = Column(Date, nullable=False)
     end_date              = Column(Date, nullable=False)
 
-    # Workflow status
-    status                = Column(String, default="UPCOMING")        # UPCOMING | IN_PROGRESS | COMPLETED
-    approval_status       = Column(String, default="PENDING")         # PENDING | APPROVED | REJECTED
+    status                = Column(String, default="UPCOMING")
+    approval_status       = Column(String, default="PENDING")
     approval_note         = Column(Text, nullable=True)
-    approved_by           = Column(String, nullable=True)             # user ID of last reviewer
+    approved_by           = Column(String, nullable=True)
 
-    # Report fields
     report_summary        = Column(Text, nullable=True)
     report_challenges     = Column(Text, nullable=True)
     report_recommendations= Column(Text, nullable=True)
     report_submitted_at   = Column(Date, nullable=True)
-    report_approval_status= Column(String, default="PENDING")         # PENDING | APPROVED | REJECTED
+    report_approval_status= Column(String, default="PENDING")
     report_approval_note  = Column(Text, nullable=True)
-    report_approved_by    = Column(String, nullable=True)             # user ID of report reviewer
+    report_approved_by    = Column(String, nullable=True)
 
-    # Certificates
     certificates_issued   = Column(Boolean, default=False)
+    certificates_signed   = Column(Boolean, default=False, nullable=False)
 
-    # Standardized NASCOP training program
     program_id            = Column(String, ForeignKey("training_programs.id", ondelete="SET NULL"), nullable=True, index=True)
 
-    # Audit
     created_by            = Column(String, ForeignKey("users.id"), nullable=True)
     created_at            = Column(DateTime(timezone=True), server_default=func.now())
     updated_at            = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # Relationships
     created_by_user       = relationship("User", back_populates="sessions",
                                          foreign_keys=[created_by])
     participants          = relationship("Participant", back_populates="session",
@@ -56,3 +54,4 @@ class TrainingSession(Base):
     trainers              = relationship("SessionTrainer", back_populates="session",
                                          cascade="all, delete-orphan")
     program               = relationship("TrainingProgram", back_populates="sessions")
+    sponsor               = relationship("Sponsor", back_populates="sessions")

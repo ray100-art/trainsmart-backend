@@ -17,6 +17,9 @@ class SessionCreate(BaseModel):
     program_id: Optional[str] = Field(None, min_length=1, max_length=100)
     county: str = Field(..., min_length=2, max_length=100)
     facility: str = Field(..., min_length=2, max_length=300)
+    venue: Optional[str] = Field(None, max_length=300)
+    funding_source: Optional[str] = Field(None, max_length=200)
+    sponsor_id: Optional[str] = Field(None, max_length=100)
     start_date: date
     end_date: date
     status: Literal["UPCOMING", "IN_PROGRESS"] = "UPCOMING"
@@ -33,6 +36,9 @@ class SessionUpdate(BaseModel):
     program_id: Optional[str] = Field(None, min_length=1, max_length=100)
     county: Optional[str] = Field(None, min_length=2, max_length=100)
     facility: Optional[str] = Field(None, min_length=2, max_length=300)
+    venue: Optional[str] = Field(None, max_length=300)
+    funding_source: Optional[str] = Field(None, max_length=200)
+    sponsor_id: Optional[str] = Field(None, max_length=100)
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     status: Optional[Literal["UPCOMING", "IN_PROGRESS"]] = None
@@ -54,6 +60,10 @@ class SessionOut(BaseModel):
     program_name: Optional[str] = None
     county: str
     facility: str
+    venue: Optional[str] = None
+    funding_source: Optional[str] = None
+    sponsor_id: Optional[str] = None
+    sponsor_name: Optional[str] = None
     trainee_count: int
     start_date: date
     end_date: date
@@ -71,6 +81,7 @@ class SessionOut(BaseModel):
     report_approved_by: Optional[str] = None
     report_approved_by_name: Optional[str] = None
     certificates_issued: bool
+    certificates_signed: bool = False
     participants: list[ParticipantOut] = []
     trainers: list[TrainerOut] = []
 
@@ -87,6 +98,10 @@ class SessionSummary(BaseModel):
     program_name: Optional[str] = None
     county: str
     facility: str
+    venue: Optional[str] = None
+    funding_source: Optional[str] = None
+    sponsor_id: Optional[str] = None
+    sponsor_name: Optional[str] = None
     trainee_count: int
     start_date: date
     end_date: date
@@ -100,6 +115,7 @@ class SessionSummary(BaseModel):
     report_approved_by: Optional[str] = None
     report_approved_by_name: Optional[str] = None
     certificates_issued: bool
+    certificates_signed: bool = False
 
     class Config:
         from_attributes = True

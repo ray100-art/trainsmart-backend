@@ -11,7 +11,6 @@ from app.services.session_service import to_session_out
 from app.services.audit_service import log_action
 from app.services.legacy_certificate_service import find_legacy_certificate, legacy_to_verify_dict
 from app.schemas.session import SessionOut
-from app.schemas.session import SessionOut
 
 
 def issue_certificates(
@@ -22,7 +21,9 @@ def issue_certificates(
 ) -> SessionOut:
     s = (
         db.query(TrainingSession)
-        .options(selectinload(TrainingSession.participants))
+        .options(
+            selectinload(TrainingSession.participants).selectinload(Participant.person)
+        )
         .filter(TrainingSession.id == session_id)
         .with_for_update()
         .first()
@@ -67,20 +68,22 @@ def issue_certificates(
             if not p.certificate_serial:
                 continue
 
-            # Fix 6: prefer staff_number lookup; only fall back to name if
-            # staff_number was not recorded AND the name matches exactly one user.
-            user = None
-            if p.staff_number:
+            # Prefer registry email, then staff_number → User, then unique name match.
+            to_email = None
+            if p.person_id and p.person and p.person.email:
+                to_email = p.person.email
+            elif p.staff_number:
                 user = db.query(User).filter(User.staff_number == p.staff_number).first()
-
-            if user is None and not p.staff_number:
+                if user and user.email:
+                    to_email = user.email
+            else:
                 matches = db.query(User).filter(User.full_name == p.name).all()
-                if len(matches) == 1:
-                    user = matches[0]
-                # len > 1 → ambiguous; skip email rather than risk wrong recipient
+                if len(matches) == 1 and matches[0].email:
+                    to_email = matches[0].email
+                # len > 1 → ambiguous; skip rather than risk wrong recipient
 
-            if user and user.email:
-                def _send(email=user.email, name=p.name, serial=p.certificate_serial):
+            if to_email:
+                def _send(email=to_email, name=p.name, serial=p.certificate_serial):
                     send_certificate_email(
                         to_email=email,
                         full_name=name,
@@ -98,10 +101,60 @@ def issue_certificates(
                     except Exception as e:
                         import logging
                         logging.getLogger(__name__).warning(
-                            "Certificate email failed for %s: %s", user.email, e
+                            "Certificate email failed for %s: %s", to_email, e
                         )
 
     return to_session_out(db, s)
+
+
+def sign_certificates(
+    db: Session,
+    session_id: str,
+    signed_by: str | None = None,
+) -> SessionOut:
+    """Mark issued certificates as signed (legacy Certificates → Signed)."""
+    s = db.query(TrainingSession).filter(TrainingSession.id == session_id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    if not s.certificates_issued:
+        raise HTTPException(status_code=400, detail="Issue certificates before signing them.")
+    if s.certificates_signed:
+        raise HTTPException(status_code=400, detail="Certificates are already signed.")
+    s.certificates_signed = True
+    log_action(db, user_id=signed_by, action="SIGN_CERTIFICATES",
+               entity_type="session", entity_id=session_id)
+    db.commit()
+    db.refresh(s)
+    return to_session_out(db, s)
+
+
+def list_certificate_pipeline(
+    db: Session,
+    *,
+    tab: str = "all",
+    county: str | None = None,
+    created_by: str | None = None,
+    skip: int = 0,
+    limit: int = 50,
+) -> tuple[list[TrainingSession], int]:
+    """Sessions in the certificate workflow: pending / certified / signed."""
+    q = db.query(TrainingSession).filter(TrainingSession.report_approval_status == "APPROVED")
+    if created_by:
+        q = q.filter(TrainingSession.created_by == created_by)
+    if county:
+        q = q.filter(TrainingSession.county == county)
+    if tab == "pending":
+        q = q.filter(TrainingSession.certificates_issued.is_(False))
+    elif tab == "certified":
+        q = q.filter(
+            TrainingSession.certificates_issued.is_(True),
+            TrainingSession.certificates_signed.is_(False),
+        )
+    elif tab == "signed":
+        q = q.filter(TrainingSession.certificates_signed.is_(True))
+    total = q.count()
+    items = q.order_by(TrainingSession.end_date.desc()).offset(skip).limit(limit).all()
+    return items, total
 
 
 def verify_certificate(db: Session, serial: str, era: str | None = None) -> dict:

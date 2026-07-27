@@ -19,10 +19,12 @@ _SESSION_DETAIL_OPTIONS = (
     selectinload(TrainingSession.participants),
     selectinload(TrainingSession.trainers),
     selectinload(TrainingSession.program),
+    selectinload(TrainingSession.sponsor),
 )
 
 _SESSION_LIST_OPTIONS = (
     selectinload(TrainingSession.program),
+    selectinload(TrainingSession.sponsor),
 )
 
 
@@ -61,6 +63,9 @@ def to_session_out(db: Session, session: TrainingSession, reviewer_map: dict[str
             "program_name": session.program.name,
         })
 
+    if session.sponsor:
+        out = out.model_copy(update={"sponsor_name": session.sponsor.name})
+
     return out
 
 
@@ -89,6 +94,9 @@ def to_session_summary(
             "program_name": session.program.name,
         })
 
+    if session.sponsor:
+        out = out.model_copy(update={"sponsor_name": session.sponsor.name})
+
     return out
 
 
@@ -98,15 +106,34 @@ def get_all_sessions(
     skip: int = 0,
     limit: int = 50,
     created_by: str | None = None,
+    q: str | None = None,
+    approval_status: str | None = None,
+    status: str | None = None,
+    funding_source: str | None = None,
 ) -> tuple[list[SessionSummary], int]:
-    q = _session_list_query(db)
+    query = _session_list_query(db)
     if county:
-        q = q.filter(TrainingSession.county == county)
+        query = query.filter(TrainingSession.county == county)
     if created_by:
-        q = q.filter(TrainingSession.created_by == created_by)
+        query = query.filter(TrainingSession.created_by == created_by)
+    if approval_status:
+        query = query.filter(TrainingSession.approval_status == approval_status)
+    if status:
+        query = query.filter(TrainingSession.status == status)
+    if funding_source:
+        query = query.filter(TrainingSession.funding_source.ilike(f"%{funding_source.strip()}%"))
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.filter(
+            (TrainingSession.title.ilike(like))
+            | (TrainingSession.facility.ilike(like))
+            | (TrainingSession.venue.ilike(like))
+            | (TrainingSession.funding_source.ilike(like))
+            | (TrainingSession.county.ilike(like))
+        )
 
-    total = q.count()
-    sessions = q.order_by(TrainingSession.created_at.desc()).offset(skip).limit(limit).all()
+    total = query.count()
+    sessions = query.order_by(TrainingSession.created_at.desc()).offset(skip).limit(limit).all()
 
     reviewer_ids = {s.approved_by for s in sessions if s.approved_by} | \
                    {s.report_approved_by for s in sessions if s.report_approved_by}
@@ -137,12 +164,20 @@ def create_session(db: Session, data: SessionCreate, created_by: str) -> Session
             raise HTTPException(status_code=400, detail="Selected training program is not active.")
         program_id = program.id
 
+    sponsor_id = (data.sponsor_id or "").strip() or None
+    if sponsor_id:
+        from app.services.catalog_service import get_sponsor_or_404
+        get_sponsor_or_404(db, sponsor_id)
+
     s = TrainingSession(
         id=str(uuid.uuid4()),
         title=data.title,
         program_id=program_id,
         county=normalize_county(data.county),
         facility=data.facility,
+        venue=(data.venue or "").strip() or None,
+        funding_source=(data.funding_source or "").strip() or None,
+        sponsor_id=sponsor_id,
         start_date=data.start_date,
         end_date=data.end_date,
         status=data.status,
@@ -153,8 +188,7 @@ def create_session(db: Session, data: SessionCreate, created_by: str) -> Session
     log_action(db, user_id=created_by, action="CREATE_SESSION",
                entity_type="session", entity_id=s.id, detail=s.title)
     db.commit()
-    db.refresh(s)
-    return to_session_out(db, s)
+    return get_session_out_or_404(db, s.id)
 
 
 def update_session(
@@ -182,6 +216,13 @@ def update_session(
             if not program.is_active:
                 raise HTTPException(status_code=400, detail="Selected training program is not active.")
             value = program.id
+        if field in ("venue", "funding_source") and isinstance(value, str):
+            value = value.strip() or None
+        if field == "sponsor_id":
+            value = (value or "").strip() or None
+            if value:
+                from app.services.catalog_service import get_sponsor_or_404
+                get_sponsor_or_404(db, value)
         setattr(session, field, value)
 
     material_change = bool(updates.keys() & _APPROVAL_SENSITIVE_FIELDS)
@@ -209,6 +250,24 @@ def delete_session(
                entity_type="session", entity_id=session.id, detail=session.title)
     db.delete(session)
     db.commit()
+
+
+def complete_session(
+    db: Session, session: TrainingSession, user_id: str | None = None
+) -> SessionOut:
+    """Mark training as completed (legacy Complete action) without requiring a report yet."""
+    if session.approval_status != "APPROVED":
+        raise HTTPException(status_code=400, detail="Session must be approved before it can be completed.")
+    if session.certificates_issued:
+        raise HTTPException(status_code=400, detail="Session already has certificates issued.")
+    if session.status == "COMPLETED":
+        raise HTTPException(status_code=400, detail="Session is already completed.")
+    session.status = "COMPLETED"
+    log_action(db, user_id=user_id, action="COMPLETE_SESSION",
+               entity_type="session", entity_id=session.id)
+    db.commit()
+    db.refresh(session)
+    return to_session_out(db, session)
 
 
 def approve_session(db: Session, session: TrainingSession, reviewed_by: str) -> SessionOut:
@@ -310,21 +369,58 @@ def _sync_trainee_count(db: Session, s: TrainingSession) -> None:
 def add_participant(
     db: Session,
     session: TrainingSession,
-    name: str,
-    cadre: str,
-    facility: str,
+    name: str | None = None,
+    cadre: str | None = None,
+    facility: str | None = None,
     status: str = "PRESENT",
     staff_number: str | None = None,
+    person_id: str | None = None,
     added_by: str | None = None,
 ) -> Participant:
+    resolved_person_id = None
+    if person_id:
+        from app.services.person_service import get_person_or_404
+        person = get_person_or_404(db, person_id)
+        if not person.is_active:
+            raise HTTPException(status_code=400, detail="Cannot add an inactive person.")
+        if normalize_county(person.county) != normalize_county(session.county):
+            raise HTTPException(
+                status_code=400,
+                detail="Person county must match the training session county.",
+            )
+        already = db.query(Participant).filter(
+            Participant.session_id == session.id,
+            Participant.person_id == person.id,
+        ).first()
+        if already:
+            raise HTTPException(
+                status_code=409,
+                detail="This person is already enrolled in this session.",
+            )
+        resolved_person_id = person.id
+        full_name = " ".join(
+            p for p in [person.first_name, person.middle_name, person.last_name] if p
+        )
+        name = name or full_name
+        cadre = cadre or person.qualification
+        facility = facility or person.facility
+        # Never copy national_id into staff_number — that breaks cert email lookup.
+
+    if not name or not cadre or not facility:
+        raise HTTPException(
+            status_code=400,
+            detail="name, cadre, and facility are required (or provide a valid person_id).",
+        )
+
     p = Participant(
         id=str(uuid.uuid4()),
         session_id=session.id,
-        name=name,
-        cadre=cadre,
-        facility=facility,
+        person_id=resolved_person_id,
+        name=name.strip(),
+        cadre=cadre.strip(),
+        facility=facility.strip(),
         status=status,
-        staff_number=staff_number,
+        staff_number=(staff_number or "").strip() or None,
     )
     db.add(p)
     db.flush()

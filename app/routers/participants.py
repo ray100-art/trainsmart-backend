@@ -75,7 +75,13 @@ def add_participant(
     assert_session_approved(s)
     assert_training_mutable(s)
     return session_service.add_participant(
-        db, s, data.name, data.cadre, data.facility, data.status, data.staff_number,
+        db, s,
+        name=data.name,
+        cadre=data.cadre,
+        facility=data.facility,
+        status=data.status,
+        staff_number=data.staff_number,
+        person_id=data.person_id,
         added_by=current_user.id,
     )
 

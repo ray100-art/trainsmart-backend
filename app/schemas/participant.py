@@ -1,13 +1,25 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Literal
 
 
 class ParticipantCreate(BaseModel):
-    name: str = Field(..., min_length=2, max_length=200)
-    cadre: str = Field(..., min_length=2, max_length=100)
-    facility: str = Field(..., min_length=2, max_length=200)
+    name: Optional[str] = Field(None, min_length=2, max_length=200)
+    cadre: Optional[str] = Field(None, min_length=2, max_length=100)
+    facility: Optional[str] = Field(None, min_length=2, max_length=200)
     status: Literal["PRESENT", "ABSENT"] = "PRESENT"
     staff_number: Optional[str] = Field(None, max_length=50)
+    person_id: Optional[str] = Field(None, max_length=100)
+
+    @model_validator(mode="after")
+    def require_fields_or_person(self) -> "ParticipantCreate":
+        if self.person_id:
+            return self
+        missing = [f for f in ("name", "cadre", "facility") if not getattr(self, f)]
+        if missing:
+            raise ValueError(
+                f"Provide person_id from the people registry, or fill: {', '.join(missing)}."
+            )
+        return self
 
 
 class ScoresUpdate(BaseModel):
@@ -26,6 +38,7 @@ class ParticipantOut(BaseModel):
     id: str
     name: str
     staff_number: Optional[str] = None
+    person_id: Optional[str] = None
     cadre: str
     facility: str
     status: str

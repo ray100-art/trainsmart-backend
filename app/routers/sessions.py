@@ -24,6 +24,10 @@ router = APIRouter(prefix="/sessions", tags=["Sessions"])
 @router.get("", response_model=PaginatedResponse[SessionSummary])
 def list_sessions(
     county: Optional[str] = Query(None),
+    q: Optional[str] = Query(None, description="Search title, facility, venue, funding, county"),
+    approval_status: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    funding_source: Optional[str] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -32,7 +36,15 @@ def list_sessions(
     effective_county = resolve_list_county(current_user, county)
     created_by = current_user.id if current_user.role == "ROLE_TRAINER" else None
     items, total = session_service.get_all_sessions(
-        db, effective_county, skip, limit, created_by=created_by
+        db,
+        effective_county,
+        skip,
+        limit,
+        created_by=created_by,
+        q=q,
+        approval_status=approval_status,
+        status=status,
+        funding_source=funding_source,
     )
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
@@ -81,6 +93,17 @@ def delete_session(
     s = session_service.get_session_or_404(db, session_id)
     assert_owns_session(s, current_user)
     session_service.delete_session(db, s, user_id=current_user.id)
+
+
+@router.patch("/{session_id}/complete", response_model=SessionOut)
+def complete_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_trainer),
+):
+    s = session_service.get_session_or_404(db, session_id)
+    assert_owns_session(s, current_user)
+    return session_service.complete_session(db, s, user_id=current_user.id)
 
 
 @router.patch("/{session_id}/approve", response_model=SessionOut)
