@@ -25,12 +25,19 @@ _email_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="email")
 
 VALID_ROLES = {
     "ROLE_TRAINER",
+    "ROLE_SITE_COORDINATOR",
     "ROLE_COUNTY_OFFICER",
     "ROLE_NATIONAL_ADMIN",
     "ROLE_ME_MANAGER",
     "ROLE_SYSTEM_ADMIN",
     "ROLE_TRAINEE",
 }
+
+COUNTY_SCOPED_ROLES = frozenset({
+    "ROLE_TRAINER",
+    "ROLE_SITE_COORDINATOR",
+    "ROLE_COUNTY_OFFICER",
+})
 
 _DUMMY_HASH = "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TsuQSm0l8AKKqFvpNP1M0SnbLpqu"
 
@@ -285,3 +292,45 @@ def list_users(db: Session, skip: int = 0, limit: int = 100) -> tuple[list[User]
     total = q.count()
     items = q.order_by(User.created_at.desc()).offset(skip).limit(limit).all()
     return items, total
+
+
+def request_password_reset(
+    db: Session,
+    identifier: str,
+    background_tasks: BackgroundTasks | None = None,
+) -> dict:
+    """Always return the same message to avoid username/email enumeration."""
+    identifier = (identifier or "").strip().lower()
+    user = None
+    if identifier:
+        user = db.query(User).filter(
+            (User.username == identifier) | (User.email == identifier),
+            User.is_active.is_(True),
+        ).first()
+
+    if user and user.email:
+        token, expires = _issue_setup_token()
+        user.setup_token = token
+        user.setup_token_expires = expires
+        log_action(db, user_id=user.id, action="REQUEST_PASSWORD_RESET",
+                   entity_type="user", entity_id=user.id)
+        db.commit()
+        reset_url = f"{settings.FRONTEND_URL}/setup-password?token={token}"
+        from app.services.email_service import send_password_reset_email
+
+        def _send():
+            send_password_reset_email(
+                to_email=user.email,
+                full_name=user.full_name,
+                username=user.username,
+                reset_url=reset_url,
+            )
+
+        if background_tasks:
+            background_tasks.add_task(_send)
+        elif settings.EMAIL_ENABLED:
+            _email_executor.submit(_send)
+
+    return {
+        "message": "If an account exists for that username or email, a reset link has been sent.",
+    }

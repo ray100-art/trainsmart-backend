@@ -5,15 +5,15 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.auth import LoginRequest, LoginResponse, UserCreate, UserOut
 from app.schemas.common import PaginatedResponse
-from app.services.auth_service import (
-    login_user, create_user, deactivate_user, activate_user,
-    list_users, complete_setup,
-    change_user_password, clear_auth_cookie,
-)
 from app.core.dependencies import get_current_user, require_system_admin
 from app.core.security import verify_password
 from app.core.rate_limit import check_login_ip_rate_limit
 from app.models.user import User
+from app.services.auth_service import (
+    login_user, create_user, deactivate_user, activate_user,
+    list_users, complete_setup, request_password_reset,
+    change_user_password, clear_auth_cookie,
+)
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -26,6 +26,10 @@ class ChangePasswordRequest(BaseModel):
 class SetupPasswordRequest(BaseModel):
     token: str
     new_password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    identifier: str  # username or email
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -46,6 +50,15 @@ def logout(response: Response):
 @router.post("/setup-password", response_model=LoginResponse)
 def setup_password(data: SetupPasswordRequest, response: Response, db: Session = Depends(get_db)):
     return complete_setup(db, data.token, data.new_password, response)
+
+
+@router.post("/forgot-password", status_code=200)
+def forgot_password(
+    data: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return request_password_reset(db, data.identifier, background_tasks)
 
 
 @router.post("/register", response_model=UserOut, status_code=201)

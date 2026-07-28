@@ -41,6 +41,7 @@ def send_welcome_email(
 ) -> bool:
     role_labels = {
         'ROLE_TRAINER':        'Field Trainer',
+        'ROLE_SITE_COORDINATOR': 'Site Coordinator',
         'ROLE_COUNTY_OFFICER': 'County Training Officer',
         'ROLE_NATIONAL_ADMIN': 'National Administrator',
         'ROLE_ME_MANAGER':     'M&E Manager',
@@ -129,3 +130,22 @@ def send_certificate_email(
 </div>
 </body></html>"""
     return _send_email(to_email, f"Your TrainSMART Certificate — {course_title}", html)
+
+
+def send_password_reset_email(
+    to_email: str, full_name: str, username: str, reset_url: str,
+) -> bool:
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#f4f6f9;font-family:Arial,sans-serif;">
+<div style="max-width:560px;margin:24px auto;padding:32px 24px;background:#ffffff;border-radius:12px;">
+  <h2 style="margin:0 0 12px;color:#006600;">Reset your TrainSMART password</h2>
+  <p style="margin:0 0 16px;font-size:14px;color:#444;">Dear {esc(full_name)},</p>
+  <p style="margin:0 0 16px;font-size:14px;color:#555;">We received a request to reset the password for <strong>{esc(username)}</strong>.</p>
+  <p style="margin:0 0 24px;text-align:center;">
+    <a href="{esc(reset_url)}" style="display:inline-block;background:#006600;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:700;">Set a new password</a>
+  </p>
+  <p style="margin:0;font-size:12px;color:#888;">This link expires in 48 hours. If you did not request a reset, you can ignore this email.</p>
+</div>
+</body></html>"""
+    return _send_email(to_email, "Reset your TrainSMART password", html)
