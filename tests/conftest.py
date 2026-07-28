@@ -44,6 +44,12 @@ def client():
 
 @pytest.fixture(autouse=True)
 def setup_db():
+    from app.core import rate_limit as rl
+    from app.core.cache import verify_cache, stats_cache
+    rl._buckets.clear()
+    verify_cache.clear()
+    stats_cache.clear()
+
     Base.metadata.create_all(bind=engine_test)
     db = TestingSession()
     for user_data in [
@@ -86,6 +92,10 @@ def get_token(client: TestClient, username: str, password: str) -> str:
 
 
 def auth_headers(client: TestClient, username: str, password: str) -> dict:
-    """Return Authorization headers; login also sets httpOnly cookie on the client."""
+    """Return Authorization + CSRF headers; login also sets cookies on the client."""
     token = get_token(client, username, password)
-    return {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}"}
+    csrf = client.cookies.get("trainsmart_csrf")
+    if csrf:
+        headers["X-CSRF-Token"] = csrf
+    return headers

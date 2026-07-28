@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     COOKIE_NAME: str = "trainsmart_token"
     COOKIE_SECURE: bool = False   # set True in production (HTTPS)
     COOKIE_SAMESITE: str = "lax"
+    # CSRF for cookie auth — always on in production; enable locally with CSRF_ENABLED=true
+    CSRF_ENABLED: bool = False
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
@@ -58,6 +60,10 @@ class Settings(BaseSettings):
     # Hard cap for M&E CSV exports (rows). Prevents OOM on national dumps.
     EXPORT_MAX_ROWS: int = 10000
 
+    # DB statement timeout is set in database.py (15s). Pool sized for multi-worker:
+    # workers × (DB_POOL_SIZE + DB_MAX_OVERFLOW) must stay under Postgres max_connections.
+    # Prefer PgBouncer in front of Postgres for national go-live.
+
     # Optional Moodle LMS base URL (legacy Moodle menu)
     MOODLE_URL: str = ""
 
@@ -88,6 +94,10 @@ class Settings(BaseSettings):
         if v.lower() not in allowed:
             raise ValueError(f"COOKIE_SAMESITE must be one of: {', '.join(sorted(allowed))}.")
         return v.lower()
+
+    @property
+    def csrf_enabled(self) -> bool:
+        return self.CSRF_ENABLED or self.is_production
 
     @property
     def cookie_secure(self) -> bool:

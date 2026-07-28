@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 from app.core.config import settings
@@ -25,6 +25,18 @@ engine = create_engine(
     pool_pre_ping=True,
     **_pool_kwargs,
 )
+
+if not _is_sqlite:
+    @event.listens_for(engine, "connect")
+    def _set_pg_timeouts(dbapi_conn, _connection_record):
+        # Kill runaway queries; protects the pool under national load
+        cursor = dbapi_conn.cursor()
+        try:
+            cursor.execute("SET statement_timeout = '15000'")  # 15s
+            cursor.execute("SET idle_in_transaction_session_timeout = '30000'")  # 30s
+        finally:
+            cursor.close()
+
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

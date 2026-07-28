@@ -7,7 +7,7 @@ from app.schemas.auth import LoginRequest, LoginResponse, UserCreate, UserOut
 from app.schemas.common import PaginatedResponse
 from app.core.dependencies import get_current_user, require_system_admin
 from app.core.security import verify_password
-from app.core.rate_limit import check_login_ip_rate_limit
+from app.core.rate_limit import check_login_ip_rate_limit, check_forgot_password_rate_limit
 from app.models.user import User
 from app.services.auth_service import (
     login_user, create_user, deactivate_user, activate_user,
@@ -35,8 +35,8 @@ class ForgotPasswordRequest(BaseModel):
 @router.post("/login", response_model=LoginResponse)
 def login(data: LoginRequest, response: Response, request: Request, db: Session = Depends(get_db)):
     from app.core.config import settings
-    # IP throttle for production/multi-worker; always pass db so RATE_LIMIT_STORAGE=database works
-    if settings.is_production:
+    # IP throttle always in production; also when RATE_LIMIT_STORAGE=database locally
+    if settings.is_production or settings.rate_limit_use_database:
         check_login_ip_rate_limit(request, db=db)
     return login_user(db, data.username, data.password, response)
 
@@ -55,9 +55,11 @@ def setup_password(data: SetupPasswordRequest, response: Response, db: Session =
 @router.post("/forgot-password", status_code=200)
 def forgot_password(
     data: ForgotPasswordRequest,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+    check_forgot_password_rate_limit(request, db=db)
     return request_password_reset(db, data.identifier, background_tasks)
 
 

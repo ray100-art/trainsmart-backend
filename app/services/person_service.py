@@ -23,7 +23,18 @@ def list_people(
     if county:
         query = query.filter(Person.county == normalize_county(county))
     if q:
-        like = f"%{q.strip()}%"
+        term = q.strip()
+        # Exact national-id path uses unique index (fast at millions of rows)
+        digits = "".join(c for c in term if c.isalnum())
+        if digits and digits == term.replace("-", "").replace(" ", ""):
+            exact = query.filter(Person.national_id == term).all()
+            if exact:
+                return exact, len(exact)
+            # Also try without spaces/dashes stored variants
+            exact = query.filter(Person.national_id == digits).all()
+            if exact:
+                return exact, len(exact)
+        like = f"%{term}%"
         query = query.filter(
             (Person.national_id.ilike(like))
             | (Person.first_name.ilike(like))

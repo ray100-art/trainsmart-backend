@@ -12,6 +12,15 @@ class TrainingSession(Base):
         Index("ix_training_sessions_approval_status", "approval_status"),
         Index("ix_training_sessions_county_created", "county", "created_at"),
         Index("ix_training_sessions_created_by_created", "created_by", "created_at"),
+        Index("ix_training_sessions_status", "status"),
+        Index("ix_training_sessions_end_date", "end_date"),
+        Index(
+            "ix_sessions_report_cert_pipeline",
+            "report_approval_status",
+            "certificates_issued",
+            "certificates_signed",
+            "end_date",
+        ),
     )
 
     id                    = Column(String, primary_key=True, index=True)

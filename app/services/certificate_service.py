@@ -1,16 +1,22 @@
 import uuid
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from fastapi import HTTPException, BackgroundTasks
 
 from app.models.session import TrainingSession
 from app.models.participant import Participant
 from app.models.user import User
 from app.core.config import settings
+from app.core.cache import verify_cache
 from app.services.email_service import send_certificate_email
 from app.services.session_service import to_session_out
 from app.services.audit_service import log_action
 from app.services.legacy_certificate_service import find_legacy_certificate, legacy_to_verify_dict
 from app.schemas.session import SessionOut
+
+_PIPELINE_OPTIONS = (
+    selectinload(TrainingSession.program),
+    selectinload(TrainingSession.sponsor),
+)
 
 
 def issue_certificates(
@@ -54,7 +60,9 @@ def issue_certificates(
     existing_serials = sum(1 for p in s.participants if p.certificate_serial)
 
     for i, p in enumerate(eligible, start=existing_serials + 1):
-        p.certificate_serial = f"MOH-TS-{county_code}-{year}-{session_short}-{str(i).zfill(3)}"
+        # Width grows past 999 so large sessions remain unique
+        seq = f"{i:03d}" if i < 1000 else str(i)
+        p.certificate_serial = f"MOH-TS-{county_code}-{year}-{session_short}-{seq}"
 
     s.certificates_issued = True
     log_action(db, user_id=issued_by, action="ISSUE_CERTIFICATES",
@@ -64,6 +72,13 @@ def issue_certificates(
     db.refresh(s)
 
     if settings.EMAIL_ENABLED:
+        staff_numbers = {p.staff_number for p in eligible if p.staff_number and not (p.person and p.person.email)}
+        users_by_staff: dict[str, User] = {}
+        if staff_numbers:
+            for u in db.query(User).filter(User.staff_number.in_(staff_numbers)).all():
+                if u.staff_number:
+                    users_by_staff[u.staff_number] = u
+
         for p in eligible:
             if not p.certificate_serial:
                 continue
@@ -72,11 +87,11 @@ def issue_certificates(
             to_email = None
             if p.person_id and p.person and p.person.email:
                 to_email = p.person.email
-            elif p.staff_number:
-                user = db.query(User).filter(User.staff_number == p.staff_number).first()
-                if user and user.email:
+            elif p.staff_number and p.staff_number in users_by_staff:
+                user = users_by_staff[p.staff_number]
+                if user.email:
                     to_email = user.email
-            else:
+            elif not p.staff_number:
                 matches = db.query(User).filter(User.full_name == p.name).all()
                 if len(matches) == 1 and matches[0].email:
                     to_email = matches[0].email
@@ -138,7 +153,11 @@ def list_certificate_pipeline(
     limit: int = 50,
 ) -> tuple[list[TrainingSession], int]:
     """Sessions in the certificate workflow: pending / certified / signed."""
-    q = db.query(TrainingSession).filter(TrainingSession.report_approval_status == "APPROVED")
+    q = (
+        db.query(TrainingSession)
+        .options(*_PIPELINE_OPTIONS)
+        .filter(TrainingSession.report_approval_status == "APPROVED")
+    )
     if created_by:
         q = q.filter(TrainingSession.created_by == created_by)
     if county:
@@ -159,17 +178,26 @@ def list_certificate_pipeline(
 
 def verify_certificate(db: Session, serial: str, era: str | None = None) -> dict:
     serial = serial.strip().upper()
+    cache_key = f"{serial}|{era or '*'}"
+    cached = verify_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
-    # Current system (TrainSMART v2+)
-    p = db.query(Participant).filter(Participant.certificate_serial == serial).first()
+    # Current system (TrainSMART v2+) — single query with session join
+    p = (
+        db.query(Participant)
+        .options(joinedload(Participant.session))
+        .filter(Participant.certificate_serial == serial)
+        .first()
+    )
     if p:
-        s = db.query(TrainingSession).filter(TrainingSession.id == p.session_id).first()
+        s = p.session
         if not s:
             raise HTTPException(
                 status_code=404,
                 detail="Training session associated with this certificate no longer exists.",
             )
-        return {
+        result = {
             "valid": True,
             "source": "current",
             "era": "post_2018",
@@ -184,11 +212,15 @@ def verify_certificate(db: Session, serial: str, era: str | None = None) -> dict
             "issued_date": None,
             "serial": serial,
         }
+        verify_cache.set(cache_key, result)
+        return result
 
     # Legacy TrainSMART (migrated records)
     legacy = find_legacy_certificate(db, serial, era=era)
     if legacy:
-        return legacy_to_verify_dict(legacy)
+        result = legacy_to_verify_dict(legacy)
+        verify_cache.set(cache_key, result)
+        return result
 
     if era == "pre_2018":
         detail = "Certificate not found in pre-2018 legacy records."

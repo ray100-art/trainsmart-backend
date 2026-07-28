@@ -10,6 +10,8 @@ class Person(Base):
     __table_args__ = (
         Index("ix_people_name", "last_name", "first_name"),
         Index("ix_people_county_facility", "county", "facility"),
+        Index("ix_people_is_active", "is_active"),
+        Index("ix_people_county_active_name", "county", "is_active", "last_name", "first_name"),
     )
 
     id              = Column(String, primary_key=True)

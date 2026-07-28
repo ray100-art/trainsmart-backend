@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.csrf import CsrfMiddleware
 from app.database import get_db, engine
 from app.routers import (
     auth, sessions, participants, trainers, certificates, stats, programs, audit,
@@ -45,12 +46,16 @@ app = FastAPI(
 if settings.trusted_hosts_list:
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts_list)
 
+# CSRF runs inside CORS so preflight still works; add after CORS (Starlette = last added runs first)
+app.add_middleware(CsrfMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins_list,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token"],
+    expose_headers=["X-CSRF-Token"],
 )
 
 PREFIX = "/api/v1"

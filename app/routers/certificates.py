@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, BackgroundTasks, Request, Query, UploadFile, File, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, JSONResponse
 from sqlalchemy.orm import Session
 from typing import Optional, Literal
 
@@ -38,7 +38,14 @@ def certificate_pipeline(
         skip=skip,
         limit=limit,
     )
-    summaries = [to_session_summary(db, s) for s in items]
+    reviewer_ids = {s.approved_by for s in items if s.approved_by} | {
+        s.report_approved_by for s in items if s.report_approved_by
+    }
+    reviewer_map: dict[str, str] = {}
+    if reviewer_ids:
+        rows = db.query(User.id, User.full_name).filter(User.id.in_(reviewer_ids)).all()
+        reviewer_map = {r.id: r.full_name for r in rows}
+    summaries = [to_session_summary(db, s, reviewer_map) for s in items]
     return PaginatedResponse(items=summaries, total=total, skip=skip, limit=limit)
 
 
@@ -69,7 +76,13 @@ def verify(
     db: Session = Depends(get_db),
 ):
     check_verify_rate_limit(request, db=db)
-    return verify_certificate(db, serial, era=era)
+    payload = verify_certificate(db, serial, era=era)
+    return JSONResponse(
+        content=payload,
+        headers={
+            "Cache-Control": "public, max-age=60, stale-while-revalidate=300",
+        },
+    )
 
 
 @router.get("/legacy/import/template.csv")

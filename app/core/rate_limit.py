@@ -231,3 +231,13 @@ def check_login_ip_rate_limit(request: Request, db: Session | None = None) -> No
         window_seconds=60,
         db=db,
     )
+
+
+def check_forgot_password_rate_limit(request: Request, db: Session | None = None) -> None:
+    check_rate_limit(
+        request,
+        "forgot_password",
+        max_requests=5,
+        window_seconds=300,
+        db=db,
+    )

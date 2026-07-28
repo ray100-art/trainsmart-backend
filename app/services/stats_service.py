@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.session import TrainingSession
 from app.models.participant import Participant
 from app.models.training_program import TrainingProgram
+from app.core.cache import stats_cache
 
 
 def _session_filters(county: str | None = None, created_by: str | None = None) -> list:
@@ -24,6 +25,11 @@ def get_overview_stats(
     county: str | None = None,
     created_by: str | None = None,
 ) -> dict:
+    cache_key = f"overview|{county or '*'}|{created_by or '*'}"
+    cached = stats_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     filters = _session_filters(county, created_by)
 
     row = db.query(
@@ -73,7 +79,7 @@ def get_overview_stats(
         .all()
     )
 
-    return {
+    result = {
         "total_sessions":               row.total,
         "approved_sessions":            row.approved,
         "completed_sessions":           row.completed,
@@ -90,6 +96,8 @@ def get_overview_stats(
         "present_participants":         prow.present,
         "sessions_by_county":           {r.county: r.cnt for r in county_rows},
     }
+    stats_cache.set(cache_key, result)
+    return result
 
 
 def get_analytics(db: Session, county: str | None = None) -> dict:
