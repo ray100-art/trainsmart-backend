@@ -95,9 +95,8 @@ class Settings(BaseSettings):
 
     @property
     def cookie_samesite_effective(self) -> str:
-        # Upgrade to 'strict' in production unless operator explicitly chose 'lax'
-        if self.is_production and self.COOKIE_SAMESITE == "none":
-            return "lax"
+        # Cross-origin hosting (e.g. Vercel FE + Render API) requires SameSite=None
+        # with Secure. Same-origin MoH deploy should use lax (default).
         return self.COOKIE_SAMESITE
 
     @property

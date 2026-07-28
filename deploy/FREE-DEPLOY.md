@@ -57,8 +57,12 @@ postgresql://user:password@ep-xxxx.eu-west-2.aws.neon.tech/neondb?sslmode=requir
 | `ENVIRONMENT` | `production` |
 | `EMAIL_ENABLED` | `false` |
 | `RATE_LIMIT_STORAGE` | `database` |
-| `ALLOWED_ORIGINS` | `https://YOUR-APP.vercel.app` (set after Step 4) |
+| `ALLOWED_ORIGINS` | `https://YOUR-APP.vercel.app` (set after Step 4; no trailing slash) |
 | `FRONTEND_URL` | `https://YOUR-APP.vercel.app` |
+| `COOKIE_SECURE` | `true` |
+| `COOKIE_SAMESITE` | `none` |
+
+> **Why `COOKIE_SAMESITE=none`?** The site on Vercel and the API on Render are different domains. Browsers only send the login cookie across domains when the cookie is `SameSite=None; Secure`. For a future same-domain MoH deploy (`nhcsc.nascop.org`), use `COOKIE_SAMESITE=lax` instead.
 
 5. Deploy → note your API URL, e.g. `https://trainsmart-api.onrender.com`
 
@@ -123,6 +127,7 @@ postgresql://user:password@ep-xxxx.eu-west-2.aws.neon.tech/neondb?sslmode=requir
 | Problem | Fix |
 |---------|-----|
 | CORS error in browser | `ALLOWED_ORIGINS` must exactly match Vercel URL (no trailing slash) |
+| Login then kicked back to login | On Render set `COOKIE_SAMESITE=none`, `COOKIE_SECURE=true`, and `ALLOWED_ORIGINS` to your Vercel URL, then redeploy API |
 | 401 after page refresh | Fixed in frontend — redeploy latest frontend |
 | `health` unhealthy | Check `DATABASE_URL` and Neon project is active |
 | Build fails on seed | Check Render logs; re-run deploy |
