@@ -18,6 +18,11 @@ ENV/
 .admin_credentials
 .admin_credentials.*
 
+# ── Secrets / local env (never commit) ────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
 # ── Databases ─────────────────────────────────────────────────────────────────
 *.db
 *.sqlite
