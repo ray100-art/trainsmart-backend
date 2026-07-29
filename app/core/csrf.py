@@ -27,6 +27,9 @@ _EXEMPT_PREFIXES = (
     "/api/v1/auth/login",
     "/api/v1/auth/forgot-password",
     "/api/v1/auth/setup-password",
+    "/api/v1/auth/mfa/verify",
+    "/api/v1/auth/mfa/setup/start",
+    "/api/v1/auth/mfa/setup/confirm",
 )
 
 

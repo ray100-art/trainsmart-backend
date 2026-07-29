@@ -19,6 +19,8 @@ class User(Base):
     token_version        = Column(Integer, default=0, nullable=False)
     setup_token          = Column(String, nullable=True, index=True)
     setup_token_expires  = Column(DateTime(timezone=True), nullable=True)
+    mfa_enabled          = Column(Boolean, default=False, nullable=False)
+    mfa_secret           = Column(String, nullable=True)
     created_at           = Column(DateTime(timezone=True), server_default=func.now())
     updated_at           = Column(DateTime(timezone=True), onupdate=func.now())
 

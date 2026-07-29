@@ -11,12 +11,45 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    """Auth is cookie-based; JWT is not returned in the response body."""
-    role: str
-    county: str
-    username: str
-    full_name: str
+    """Auth is cookie-based; JWT is not returned in the response body.
+
+    When MFA is required (or first-time setup for privileged roles), the auth
+    cookie is not set and mfa_token is a short-lived challenge JWT.
+    """
+    mfa_required: bool = False
+    mfa_setup_required: bool = False
+    mfa_token: Optional[str] = None
+    role: Optional[str] = None
+    county: Optional[str] = None
+    username: Optional[str] = None
+    full_name: Optional[str] = None
     staff_number: Optional[str] = None
+
+
+class MfaVerifyRequest(BaseModel):
+    mfa_token: str = Field(..., min_length=10)
+    code: str = Field(..., min_length=6, max_length=8)
+
+
+class MfaSetupStartRequest(BaseModel):
+    """Start MFA enrollment. Use mfa_token during login challenge, or session cookie when already signed in."""
+    mfa_token: Optional[str] = None
+
+
+class MfaSetupConfirmRequest(BaseModel):
+    mfa_token: Optional[str] = None
+    secret: str = Field(..., min_length=16, max_length=64)
+    code: str = Field(..., min_length=6, max_length=8)
+
+
+class MfaDisableRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=128)
+    code: str = Field(..., min_length=6, max_length=8)
+
+
+class MfaSetupResponse(BaseModel):
+    secret: str
+    otpauth_uri: str
 
 
 class UserCreate(BaseModel):
@@ -57,6 +90,7 @@ class UserOut(BaseModel):
     county: str
     staff_number: Optional[str] = None
     is_active: bool
+    mfa_enabled: bool = False
 
     class Config:
         from_attributes = True

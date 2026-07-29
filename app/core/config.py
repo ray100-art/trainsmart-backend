@@ -51,11 +51,18 @@ class Settings(BaseSettings):
     # "database" — PostgreSQL-backed; survives restarts, works across workers
     RATE_LIMIT_STORAGE: str = "memory"
 
-    # Trust X-Forwarded-For / X-Real-IP only behind a reverse proxy (nginx).
+    # Trust X-Real-IP / X-Forwarded-For only behind a reverse proxy (nginx).
+    # MUST be True in production behind nginx so rate limits and audit IPs work.
     TRUST_PROXY_HEADERS: bool = False
 
     # Comma-separated hostnames; empty = disabled. Example: nhcsc.nascop.org,api.example.com
     TRUSTED_HOSTS: str = ""
+
+    # MFA: when True, System / National / M&E admins must enroll MFA before full login.
+    MFA_ENFORCE_PRIVILEGED: bool = False
+    # Comma-separated roles that require MFA when MFA_ENFORCE_PRIVILEGED is True.
+    MFA_REQUIRED_ROLES: str = "ROLE_SYSTEM_ADMIN,ROLE_NATIONAL_ADMIN,ROLE_ME_MANAGER"
+    MFA_CHALLENGE_MINUTES: int = 5
 
     # Hard cap for M&E CSV exports (rows). Prevents OOM on national dumps.
     EXPORT_MAX_ROWS: int = 10000
@@ -127,6 +134,12 @@ class Settings(BaseSettings):
         if self.is_production:
             return True
         return self.RATE_LIMIT_STORAGE == "database"
+
+    @property
+    def mfa_required_roles_set(self) -> frozenset[str]:
+        return frozenset(
+            r.strip() for r in self.MFA_REQUIRED_ROLES.split(",") if r.strip()
+        )
 
     @property
     def docs_enabled(self) -> bool:

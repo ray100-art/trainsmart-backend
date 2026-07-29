@@ -25,17 +25,28 @@ _CLEANUP_INTERVAL_SECONDS = 300
 _CLEANUP_MAX_STALE_SECONDS = 600
 
 
-def _client_ip(request: Request) -> str:
+def get_client_ip(request: Request) -> str:
+    """Resolve client IP. Prefer X-Real-IP when TRUST_PROXY_HEADERS is on
+    (nginx sets it from $remote_addr). Do not trust leftmost X-Forwarded-For
+    alone — that hop is client-spoofable when the proxy only appends.
+    """
     if settings.TRUST_PROXY_HEADERS:
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
         real_ip = request.headers.get("X-Real-IP")
         if real_ip:
             return real_ip.strip()
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            # Rightmost address is the one the immediate proxy observed.
+            parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+            if parts:
+                return parts[-1]
     if request.client:
         return request.client.host
     return "unknown"
+
+
+# Back-compat alias used inside this module
+_client_ip = get_client_ip
 
 
 def _maybe_cleanup(now: datetime) -> None:

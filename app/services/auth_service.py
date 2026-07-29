@@ -17,6 +17,9 @@ from app.core.rate_limit import (
 from app.lib.county import normalize_county
 from app.services.email_service import send_welcome_email
 from app.services.audit_service import log_action
+from app.services.mfa_service import (
+    create_mfa_challenge_token, role_requires_mfa, resolve_mfa_user, verify_totp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,10 +114,27 @@ def _build_token(user: User) -> str:
 def _auth_response_body(user: User) -> dict:
     """Browser clients use the httpOnly cookie; JWT is not returned in the body."""
     return {
+        "mfa_required": False,
+        "mfa_setup_required": False,
+        "mfa_token": None,
         "role":         user.role,
         "county":       user.county,
         "username":     user.username,
         "full_name":    user.full_name,
+        "staff_number": user.staff_number,
+    }
+
+
+def _mfa_challenge_body(user: User, *, setup: bool) -> dict:
+    token = create_mfa_challenge_token(user)
+    return {
+        "mfa_required": not setup,
+        "mfa_setup_required": setup,
+        "mfa_token": token,
+        "role": user.role,
+        "county": user.county,
+        "username": user.username,
+        "full_name": user.full_name,
         "staff_number": user.staff_number,
     }
 
@@ -124,6 +144,8 @@ def create_user(
     data: UserCreate,
     background_tasks: BackgroundTasks | None = None,
     requesting_user_id: str | None = None,
+    *,
+    ip_address: str | None = None,
 ) -> User:
     validate_password_strength(data.password)
     _validate_role(data.role)
@@ -155,7 +177,8 @@ def create_user(
     db.flush()
     log_action(db, user_id=requesting_user_id, action="CREATE_USER",
                entity_type="user", entity_id=user.id,
-               detail=f"{user.username} ({user.role}, {user.county})")
+               detail=f"{user.username} ({user.role}, {user.county})",
+               ip_address=ip_address)
     db.commit()
     db.refresh(user)
 
@@ -204,17 +227,95 @@ def authenticate_user(db: Session, identifier: str, password: str) -> User:
     return user
 
 
-def login_user(db: Session, username: str, password: str, response: Response) -> dict:
+def login_user(
+    db: Session,
+    username: str,
+    password: str,
+    response: Response,
+    *,
+    ip_address: str | None = None,
+) -> dict:
     user = authenticate_user(db, username, password)
+
+    if user.mfa_enabled and user.mfa_secret:
+        log_action(db, user_id=user.id, action="LOGIN_MFA_CHALLENGE",
+                   entity_type="user", entity_id=user.id, ip_address=ip_address)
+        db.commit()
+        return _mfa_challenge_body(user, setup=False)
+
+    if role_requires_mfa(user.role):
+        log_action(db, user_id=user.id, action="LOGIN_MFA_SETUP_REQUIRED",
+                   entity_type="user", entity_id=user.id, ip_address=ip_address)
+        db.commit()
+        return _mfa_challenge_body(user, setup=True)
+
     token = _build_token(user)
     _set_auth_cookie(response, token)
     log_action(db, user_id=user.id, action="LOGIN",
-               entity_type="user", entity_id=user.id)
+               entity_type="user", entity_id=user.id, ip_address=ip_address)
     db.commit()
     return _auth_response_body(user)
 
 
-def complete_setup(db: Session, token: str, new_password: str, response: Response) -> dict:
+def complete_mfa_login(
+    db: Session,
+    mfa_token: str,
+    code: str,
+    response: Response,
+    *,
+    ip_address: str | None = None,
+) -> dict:
+    user = resolve_mfa_user(db, mfa_token)
+    if not user.mfa_enabled or not user.mfa_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is not enabled. Complete setup first.",
+        )
+    if not verify_totp(user.mfa_secret, code):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authenticator code.",
+        )
+    token = _build_token(user)
+    _set_auth_cookie(response, token)
+    log_action(db, user_id=user.id, action="LOGIN",
+               entity_type="user", entity_id=user.id,
+               detail="mfa", ip_address=ip_address)
+    db.commit()
+    return _auth_response_body(user)
+
+
+def issue_session(user: User, response: Response) -> dict:
+    """Set auth cookie and return the standard login body."""
+    _set_auth_cookie(response, _build_token(user))
+    return _auth_response_body(user)
+
+
+def logout_user(
+    db: Session,
+    user: User | None,
+    response: Response,
+    *,
+    ip_address: str | None = None,
+) -> dict:
+    """Clear cookie and revoke JWT by bumping token_version when user is known."""
+    if user is not None:
+        user.token_version = (user.token_version or 0) + 1
+        log_action(db, user_id=user.id, action="LOGOUT",
+                   entity_type="user", entity_id=user.id, ip_address=ip_address)
+        db.commit()
+    clear_auth_cookie(response)
+    return {"message": "Logged out successfully."}
+
+
+def complete_setup(
+    db: Session,
+    token: str,
+    new_password: str,
+    response: Response,
+    *,
+    ip_address: str | None = None,
+) -> dict:
     validate_password_strength(new_password)
     user = db.query(User).filter(User.setup_token == token).first()
     if not user:
@@ -231,16 +332,25 @@ def complete_setup(db: Session, token: str, new_password: str, response: Respons
     user.setup_token_expires  = None
     user.token_version        = (user.token_version or 0) + 1
     log_action(db, user_id=user.id, action="SETUP_PASSWORD",
-               entity_type="user", entity_id=user.id)
+               entity_type="user", entity_id=user.id, ip_address=ip_address)
     db.commit()
     db.refresh(user)
+
+    if role_requires_mfa(user.role) and not user.mfa_enabled:
+        return _mfa_challenge_body(user, setup=True)
 
     jwt_token = _build_token(user)
     _set_auth_cookie(response, jwt_token)
     return _auth_response_body(user)
 
 
-def change_user_password(db: Session, user: User, new_password: str) -> None:
+def change_user_password(
+    db: Session,
+    user: User,
+    new_password: str,
+    *,
+    ip_address: str | None = None,
+) -> None:
     validate_password_strength(new_password)
     if verify_password(new_password, user.hashed_password):
         raise HTTPException(
@@ -252,11 +362,17 @@ def change_user_password(db: Session, user: User, new_password: str) -> None:
     user.setup_token         = None
     user.setup_token_expires = None
     log_action(db, user_id=user.id, action="CHANGE_PASSWORD",
-               entity_type="user", entity_id=user.id)
+               entity_type="user", entity_id=user.id, ip_address=ip_address)
     db.commit()
 
 
-def deactivate_user(db: Session, user_id: str, requesting_user: User) -> User:
+def deactivate_user(
+    db: Session,
+    user_id: str,
+    requesting_user: User,
+    *,
+    ip_address: str | None = None,
+) -> User:
     if requesting_user.role != "ROLE_SYSTEM_ADMIN":
         raise HTTPException(status_code=403, detail="Only system admins can deactivate accounts.")
     user = db.query(User).filter(User.id == user_id).first()
@@ -268,20 +384,26 @@ def deactivate_user(db: Session, user_id: str, requesting_user: User) -> User:
     user.token_version = (user.token_version or 0) + 1
     log_action(db, user_id=requesting_user.id, action="DEACTIVATE_USER",
                entity_type="user", entity_id=user.id,
-               detail=user.username)
+               detail=user.username, ip_address=ip_address)
     db.commit()
     db.refresh(user)
     return user
 
 
-def activate_user(db: Session, user_id: str, requesting_user_id: str | None = None) -> User:
+def activate_user(
+    db: Session,
+    user_id: str,
+    requesting_user_id: str | None = None,
+    *,
+    ip_address: str | None = None,
+) -> User:
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
     user.is_active = True
     log_action(db, user_id=requesting_user_id, action="ACTIVATE_USER",
                entity_type="user", entity_id=user.id,
-               detail=user.username)
+               detail=user.username, ip_address=ip_address)
     db.commit()
     db.refresh(user)
     return user
@@ -298,6 +420,8 @@ def request_password_reset(
     db: Session,
     identifier: str,
     background_tasks: BackgroundTasks | None = None,
+    *,
+    ip_address: str | None = None,
 ) -> dict:
     """Always return the same message to avoid username/email enumeration."""
     identifier = (identifier or "").strip().lower()
@@ -313,7 +437,7 @@ def request_password_reset(
         user.setup_token = token
         user.setup_token_expires = expires
         log_action(db, user_id=user.id, action="REQUEST_PASSWORD_RESET",
-                   entity_type="user", entity_id=user.id)
+                   entity_type="user", entity_id=user.id, ip_address=ip_address)
         db.commit()
         reset_url = f"{settings.FRONTEND_URL}/setup-password?token={token}"
         from app.services.email_service import send_password_reset_email

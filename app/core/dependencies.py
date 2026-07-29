@@ -39,6 +39,11 @@ def get_current_user(
         token_version = payload.get("tv", 0)
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        if payload.get("purpose") == "mfa_challenge":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="MFA challenge token cannot access the API. Complete MFA first.",
+            )
     except InvalidTokenError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired or invalid")
 
@@ -50,6 +55,20 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired. Please log in again.")
 
     return user
+
+
+def get_current_user_optional(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User | None:
+    token = _extract_token(request, credentials)
+    if not token:
+        return None
+    try:
+        return get_current_user(request, credentials, db)
+    except HTTPException:
+        return None
 
 
 def require_roles(*roles: str):
