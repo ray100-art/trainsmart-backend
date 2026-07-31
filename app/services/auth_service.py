@@ -218,6 +218,15 @@ def authenticate_user(db: Session, identifier: str, password: str) -> User:
 
     if not user or not password_ok or not user.is_active:
         record_failed_login(db, identifier)
+        log_action(
+            db,
+            user_id=user.id if user else None,
+            action="LOGIN_FAILED",
+            entity_type="user",
+            entity_id=user.id if user else None,
+            detail=identifier[:80],
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials. Please check your username and password.",
@@ -237,17 +246,19 @@ def login_user(
 ) -> dict:
     user = authenticate_user(db, username, password)
 
-    if user.mfa_enabled and user.mfa_secret:
-        log_action(db, user_id=user.id, action="LOGIN_MFA_CHALLENGE",
-                   entity_type="user", entity_id=user.id, ip_address=ip_address)
-        db.commit()
-        return _mfa_challenge_body(user, setup=False)
+    # MFA temporarily disabled (MFA_ENABLED=False). Password login always issues a session.
+    if settings.MFA_ENABLED:
+        if user.mfa_enabled and user.mfa_secret:
+            log_action(db, user_id=user.id, action="LOGIN_MFA_CHALLENGE",
+                       entity_type="user", entity_id=user.id, ip_address=ip_address)
+            db.commit()
+            return _mfa_challenge_body(user, setup=False)
 
-    if role_requires_mfa(user.role):
-        log_action(db, user_id=user.id, action="LOGIN_MFA_SETUP_REQUIRED",
-                   entity_type="user", entity_id=user.id, ip_address=ip_address)
-        db.commit()
-        return _mfa_challenge_body(user, setup=True)
+        if role_requires_mfa(user.role):
+            log_action(db, user_id=user.id, action="LOGIN_MFA_SETUP_REQUIRED",
+                       entity_type="user", entity_id=user.id, ip_address=ip_address)
+            db.commit()
+            return _mfa_challenge_body(user, setup=True)
 
     token = _build_token(user)
     _set_auth_cookie(response, token)
@@ -272,6 +283,9 @@ def complete_mfa_login(
             detail="MFA is not enabled. Complete setup first.",
         )
     if not verify_totp(user.mfa_secret, code):
+        log_action(db, user_id=user.id, action="MFA_FAILED",
+                   entity_type="user", entity_id=user.id, ip_address=ip_address)
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authenticator code.",
@@ -285,9 +299,27 @@ def complete_mfa_login(
     return _auth_response_body(user)
 
 
-def issue_session(user: User, response: Response) -> dict:
+def issue_session(
+    user: User,
+    response: Response,
+    *,
+    db: Session | None = None,
+    ip_address: str | None = None,
+    detail: str | None = None,
+) -> dict:
     """Set auth cookie and return the standard login body."""
     _set_auth_cookie(response, _build_token(user))
+    if db is not None:
+        log_action(
+            db,
+            user_id=user.id,
+            action="LOGIN",
+            entity_type="user",
+            entity_id=user.id,
+            detail=detail,
+            ip_address=ip_address,
+        )
+        db.commit()
     return _auth_response_body(user)
 
 
@@ -382,6 +414,10 @@ def deactivate_user(
         raise HTTPException(status_code=400, detail="You cannot deactivate your own account.")
     user.is_active     = False
     user.token_version = (user.token_version or 0) + 1
+    user.setup_token = None
+    user.setup_token_expires = None
+    user.mfa_enabled = False
+    user.mfa_secret = None
     log_action(db, user_id=requesting_user.id, action="DEACTIVATE_USER",
                entity_type="user", entity_id=user.id,
                detail=user.username, ip_address=ip_address)

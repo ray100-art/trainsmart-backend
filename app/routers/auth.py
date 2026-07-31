@@ -59,6 +59,8 @@ def mfa_verify(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    from app.services.mfa_service import assert_mfa_available
+    assert_mfa_available()
     return complete_mfa_login(
         db, data.mfa_token, data.code, response,
         ip_address=get_client_ip(request),
@@ -71,6 +73,8 @@ def mfa_setup_start(
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
+    from app.services.mfa_service import assert_mfa_available
+    assert_mfa_available()
     if data.mfa_token:
         user = resolve_mfa_user(db, data.mfa_token)
     elif current_user is not None:
@@ -90,6 +94,8 @@ def mfa_setup_confirm(
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
+    from app.services.mfa_service import assert_mfa_available
+    assert_mfa_available()
     ip = get_client_ip(request)
     if data.mfa_token:
         user = resolve_mfa_user(db, data.mfa_token)
@@ -100,7 +106,7 @@ def mfa_setup_confirm(
     if user.mfa_enabled:
         raise HTTPException(status_code=400, detail="MFA is already enabled.")
     confirm_setup(db, user, data.secret, data.code, ip_address=ip)
-    return issue_session(user, response)
+    return issue_session(user, response, db=db, ip_address=ip, detail="mfa_setup")
 
 
 @router.post("/mfa/disable", status_code=200)
@@ -110,6 +116,8 @@ def mfa_disable(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from app.services.mfa_service import assert_mfa_available
+    assert_mfa_available()
     disable_mfa(
         db, current_user, data.current_password, data.code,
         ip_address=get_client_ip(request),

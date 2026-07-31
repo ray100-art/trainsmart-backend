@@ -229,6 +229,7 @@ def update_session(
     if material_change and session.approval_status == "APPROVED" and not session.certificates_issued:
         session.approval_status = "PENDING"
         session.approval_note = None
+        session.approved_by = None
 
     log_action(db, user_id=user_id, action="UPDATE_SESSION",
                entity_type="session", entity_id=session.id,
@@ -346,6 +347,16 @@ def approve_report(db: Session, session: TrainingSession, reviewed_by: str) -> S
 
 
 def reject_report(db: Session, session: TrainingSession, note: str, reviewed_by: str) -> SessionOut:
+    if session.certificates_issued:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot reject a report after certificates have been issued.",
+        )
+    if session.report_approval_status == "APPROVED":
+        raise HTTPException(
+            status_code=400,
+            detail="Report is already approved. Contact a system administrator if a correction is required.",
+        )
     if session.report_approval_status == "REJECTED":
         raise HTTPException(status_code=400, detail="Report is already rejected.")
     session.report_approval_status = "REJECTED"

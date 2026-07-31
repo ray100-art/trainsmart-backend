@@ -58,9 +58,10 @@ class Settings(BaseSettings):
     # Comma-separated hostnames; empty = disabled. Example: nhcsc.nascop.org,api.example.com
     TRUSTED_HOSTS: str = ""
 
-    # MFA: when True, System / National / M&E admins must enroll MFA before full login.
+    # MFA master switch — off for now (authenticator flow retained in code for later).
+    MFA_ENABLED: bool = False
+    # When MFA_ENABLED and this is True, System / National / M&E admins must enroll MFA.
     MFA_ENFORCE_PRIVILEGED: bool = False
-    # Comma-separated roles that require MFA when MFA_ENFORCE_PRIVILEGED is True.
     MFA_REQUIRED_ROLES: str = "ROLE_SYSTEM_ADMIN,ROLE_NATIONAL_ADMIN,ROLE_ME_MANAGER"
     MFA_CHALLENGE_MINUTES: int = 5
 

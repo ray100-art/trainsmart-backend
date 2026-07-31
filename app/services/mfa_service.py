@@ -18,9 +18,17 @@ ISSUER = "TrainSMART"
 
 
 def role_requires_mfa(role: str) -> bool:
-    if not settings.MFA_ENFORCE_PRIVILEGED:
+    if not settings.MFA_ENABLED or not settings.MFA_ENFORCE_PRIVILEGED:
         return False
     return role in settings.mfa_required_roles_set
+
+
+def assert_mfa_available() -> None:
+    if not settings.MFA_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Multi-factor authentication is temporarily disabled.",
+        )
 
 
 def create_mfa_challenge_token(user: User) -> str:

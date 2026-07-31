@@ -26,6 +26,7 @@ _can_manage_people = require_roles(
 def list_people(
     q: Optional[str] = Query(None),
     county: Optional[str] = Query(None),
+    active_only: bool = Query(True),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -37,7 +38,7 @@ def list_people(
     elif county:
         effective_county = normalize_county(county)
     items, total = person_service.list_people(
-        db, q=q, county=effective_county, skip=skip, limit=limit
+        db, q=q, county=effective_county, active_only=active_only, skip=skip, limit=limit
     )
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 

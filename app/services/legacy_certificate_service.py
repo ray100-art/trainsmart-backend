@@ -99,6 +99,14 @@ def import_legacy_csv(db: Session, csv_text: str, *, skip_duplicates: bool = Tru
                     continue
                 raise ValueError(f"serial already exists: {serial}")
 
+            from app.models.participant import Participant
+            live = db.query(Participant.id).filter(Participant.certificate_serial == serial).first()
+            if live:
+                if skip_duplicates:
+                    skipped += 1
+                    continue
+                raise ValueError(f"serial already issued on a live training session: {serial}")
+
             era = _normalize_era(row.get("era") or "post_2018")
             score_raw = (row.get("post_test_score") or "").strip()
             post_score = float(score_raw) if score_raw else None
