@@ -1,74 +1,93 @@
 # TrainSMART Backend
 
-FastAPI + PostgreSQL API for NASCOP/MOH Kenya national training registry.
+FastAPI + PostgreSQL API for **TrainSMART**, a national registry for healthcare-worker training in
+Kenya: training sessions, participants, attendance and scores, a certificate approval pipeline,
+and public certificate verification.
 
-## Development
+> **Status:** independently designed and built by [Brian Ndung'u](https://github.com/ray100-art) as a
+> proposed replacement for NASCOP's legacy TrainSMART registry. It is **not** an official Ministry of
+> Health deployment. The live instance is a demo.
 
-```powershell
-cd C:\transmart-backend
-python -m venv venv
-.\venv\Scripts\Activate.ps1
+**Live demo:** [trainsmart-fronted.vercel.app](https://trainsmart-fronted.vercel.app) ·
+**Frontend:** [ray100-art/trainsmart-fronted](https://github.com/ray100-art/trainsmart-fronted)
+
+`Python 3.12` `FastAPI` `SQLAlchemy 2` `PostgreSQL` `Alembic` `Pydantic v2` `pytest` `GitHub Actions` `Docker` `Nginx`
+
+---
+
+## What it does
+
+| Area | Capabilities |
+|------|--------------|
+| **Training sessions** | Create, edit, complete; national approve / reject; post-training report submission and approval |
+| **Participants** | Register attendees per session, record attendance and pre/post-test scores, bulk CSV import |
+| **People registry** | Deduplicated person records across sessions, facility and sponsor catalogues, CSV import |
+| **Certificates** | Issue → sign pipeline; public verification by serial number, covering current and pre-2018 legacy certificates |
+| **Legacy migration** | CSV import of historical certificates so old serials still verify |
+| **Reporting** | Overview and analytics endpoints, CSV exports of sessions and participants |
+| **Administration** | User accounts via invitation and password setup, activation and deactivation, full audit log |
+
+## Security and data integrity
+
+- **Role-based access control** with six roles (trainer, site coordinator, county officer, national admin,
+  M&E manager, system admin). County and site roles are scoped to their own data.
+- **Cookie-based JWT auth with CSRF protection** (double-submit token). Logout revokes sessions through a
+  `token_version` bump.
+- **TOTP multi-factor authentication** for privileged roles, switched by configuration (`MFA_ENABLED`, `MFA_ENFORCE_PRIVILEGED`).
+- **Rate limiting** on login, forgot-password and public certificate verification, using the real client IP behind a proxy.
+- **Audit log** of authentication and data-changing events, including the client IP.
+- **No default credentials:** `seed.py` generates a random admin password and writes it to a one-time file.
+- **Integrity tooling:** `scripts/integrity_check.py` reports orphaned or inconsistent rows and can apply safe cleanups.
+- Swagger/ReDoc docs are disabled when `ENVIRONMENT=production`.
+
+## Architecture
+
+```
+app/
+  routers/    HTTP layer: auth, sessions, participants, people, certificates, stats, audit, catalogues
+  services/   business rules (certificate pipeline, verification cache, email)
+  models/     SQLAlchemy models
+  schemas/    Pydantic request / response contracts
+  core/       config, security, CSRF, rate limiting, role dependencies
+alembic/      11 versioned migrations (the schema is managed only by Alembic)
+deploy/       nginx, systemd, docker-compose, scaling notes
+tests/        pytest suite (28 tests)
+```
+
+Performance work for national-scale load includes composite and trigram indexes, N+1 fixes in the
+certificate pipeline, a TTL cache on verification, and database statement timeouts. See
+[`deploy/SCALE.md`](deploy/SCALE.md).
+
+## Run locally
+
+```bash
+python -m venv venv && source venv/bin/activate   # Windows: .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-copy .env.example .env
-# Edit .env — set DATABASE_URL to your PostgreSQL instance
+cp .env.example .env          # set DATABASE_URL and SECRET_KEY
 alembic upgrade head
-python seed.py
+python seed.py                # creates the first admin; the password goes to a one-time file
 python main.py
 ```
 
-API: http://localhost:8000  
-Docs: http://localhost:8000/docs (disabled when `ENVIRONMENT=production`)
+API: `http://localhost:8000/api/v1` · Docs: `http://localhost:8000/docs`
 
-## PostgreSQL
-
-Development and production both use PostgreSQL. Example `DATABASE_URL`:
-
-```
-postgresql://postgres:password@localhost:5432/trainsmart
-```
-
-Local Postgres via Docker:
-
-```powershell
-cd deploy
-$env:POSTGRES_PASSWORD="yourpassword"
-docker compose up -d
-```
-
-Then set `DATABASE_URL=postgresql://trainsmart:yourpassword@localhost:5432/trainsmart`.
-
-## Production deployment
-
-See `deploy/` for:
-
-| File | Purpose |
-|------|---------|
-| `env.production.example` | Production environment template |
-| `docker-compose.yml` | PostgreSQL 16 container |
-| `nginx-trainsmart.conf` | Nginx reverse proxy + SPA |
-| `trainsmart-api.service` | systemd unit (4 Uvicorn workers) |
-| `deploy.sh` | Migrate + seed on Linux |
-
-### Production checklist
-
-1. Provision PostgreSQL 16 (managed or `docker compose` in `deploy/`)
-2. Copy `deploy/env.production.example` → `/etc/trainsmart/backend.env`
-3. Set `ENVIRONMENT=production`, strong `SECRET_KEY`, real `DATABASE_URL`
-4. `alembic upgrade head` && `python seed.py`
-5. Build frontend with `VITE_API_URL=/api/v1` (same-origin) or full API URL
-6. Deploy `dist/` to `/var/www/trainsmart/frontend/dist`
-7. Enable nginx site + SSL (Let's Encrypt or MOH PKI)
-8. Enable `trainsmart-api.service`
-
-### Frontend pairing
-
-Canonical frontend: `C:\trainsmart-frontend`  
-Production build: `npm run build` with `.env.production` from `.env.production.example`
+A local PostgreSQL instance is available through `deploy/docker-compose.yml`.
 
 ## Tests
 
-```powershell
-pytest tests/ -q
+```bash
+pytest -q
 ```
 
-Uses SQLite test DB only in tests — production requires PostgreSQL.
+The tests run on SQLite and cover authentication and logout revocation, the session lifecycle,
+certificate issuing and verification, legacy imports, programmes and audit logging. CI runs them on every push.
+
+## Deployment
+
+- **Free staging** (Neon + Render + Vercel): [`deploy/FREE-DEPLOY.md`](deploy/FREE-DEPLOY.md)
+- **Production** (Linux + Nginx + systemd + PostgreSQL 16): `deploy/` contains the nginx site, systemd unit,
+  environment template and `deploy.sh`
+
+## License
+
+[MIT](LICENSE)
